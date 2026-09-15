@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/gladys-channel", "crates/gladys-memory"]
+members = [
+    "crates/gladys-channel",
+    "crates/gladys-memory",
+    "crates/gladys-gateway",
+    "crates/gladys-scheduler",
+]
 
 [workspace.package]
 version = "0.1.0"
@@ -12,6 +17,8 @@ authors = ["GLaDYS contributors"]
 anyhow = "1"
 async-trait = "0.1"
 axum = { version = "0.8", features = ["ws"] }
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+cron = "0.15"
 futures-util = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
 rmcp = { version = "3.3", features = ["server", "transport-streamable-http-server"] }

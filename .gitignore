@@ -9,6 +9,16 @@
 # runtime config — commit examples only
 channel.toml
 memory.toml
+gateway.toml
+scheduler.toml
+workspace/.pi/*
+!workspace/.pi/.gitkeep
+workspace/home/*
+!workspace/home/.gitkeep
+workspace/*.toml
+workspace/.env
+workspace/data/
+workspace/run/
 .env
 .env.*
 !.env.example

@@ -1,0 +1,37 @@
+bind = "127.0.0.1:3922"
+data_dir = "./data/gateway"
+token_env = "GLADYS_GATEWAY_TOKEN"
+channel_ws = "ws://127.0.0.1:3920/v1/gateway"
+channel_token_env = "GLADYS_CHANNEL_TOKEN"
+memory_url = "http://127.0.0.1:3921"
+memory_token_env = "GLADYS_MEMORY_TOKEN"
+idle_group_secs = 30
+debounce_ms = 1000
+owners = ["onebot:123456"]
+
+[agent]
+kind = "acp"
+command = "docker"
+args = ["exec", "-i", "-w", "/workspace", "gladys-agent", "pi-acp"]
+cwd = "/workspace"
+
+[policy]
+group_mode = "whitelist"
+dm_mode = "blacklist"
+groups = ["onebot:group:477517182"]
+dms = []
+
+[[mcp]]
+name = "channel"
+url = "http://127.0.0.1:3920/mcp"
+token_env = "GLADYS_CHANNEL_TOKEN"
+
+[[mcp]]
+name = "memory"
+url = "http://127.0.0.1:3921/mcp"
+token_env = "GLADYS_MEMORY_TOKEN"
+
+[[mcp]]
+name = "scheduler"
+url = "http://127.0.0.1:3923/mcp"
+token_env = "GLADYS_SCHEDULER_TOKEN"
