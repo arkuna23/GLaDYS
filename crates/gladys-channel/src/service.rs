@@ -29,6 +29,7 @@ pub enum BusEvent {
         account: String,
         up: bool,
         detail: String,
+        self_id: Option<String>,
     },
     Health {
         ok: bool,
@@ -226,11 +227,13 @@ impl Service {
                 account,
                 up,
                 detail,
+                self_id,
             } => {
                 let _ = self.bus.send(BusEvent::Connection {
                     account,
                     up,
                     detail,
+                    self_id,
                 });
             }
         }
@@ -407,7 +410,6 @@ mod tests {
             api_base_url: None,
             access_token_env: None,
             download_media: None,
-            self_id: None,
         }
     }
 
@@ -422,7 +424,6 @@ mod tests {
             api_base_url: None,
             access_token_env: None,
             download_media: Some(false),
-            self_id: None,
         }
     }
 

@@ -136,9 +136,10 @@ fn event_json(seq: u64, ev: &BusEvent) -> Value {
             account,
             up,
             detail,
+            self_id,
         } => (
             "connection",
-            json!({"account": account, "up": up, "detail": detail}),
+            json!({"account": account, "up": up, "detail": detail, "self_id": self_id}),
         ),
         BusEvent::Health { ok, accounts } => ("health", json!({"ok": ok, "accounts": accounts})),
     };

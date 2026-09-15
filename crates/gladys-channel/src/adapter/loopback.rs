@@ -25,7 +25,7 @@ impl LoopbackAdapter {
                 id: cfg.id.clone(),
                 channel: "loopback".into(),
                 profile: profile.as_str().into(),
-                self_id: cfg.self_id.clone(),
+                self_id: Some(cfg.id.clone()),
             },
             up: AtomicBool::new(true),
             seq: AtomicU64::new(1),
@@ -90,6 +90,7 @@ impl Adapter for LoopbackAdapter {
                 account: self.meta.id.clone(),
                 up: true,
                 detail: "loopback".into(),
+                self_id: self.meta.self_id.clone(),
             })
             .await;
         std::future::pending::<()>().await;

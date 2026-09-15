@@ -24,7 +24,6 @@ fn loopback_cfg() -> AccountConfig {
         api_base_url: None,
         access_token_env: None,
         download_media: None,
-        self_id: None,
     }
 }
 

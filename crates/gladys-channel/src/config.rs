@@ -50,8 +50,6 @@ pub struct AccountConfig {
     pub access_token_env: Option<String>,
     #[serde(default)]
     pub download_media: Option<bool>,
-    #[serde(default)]
-    pub self_id: Option<String>,
 }
 
 impl Config {

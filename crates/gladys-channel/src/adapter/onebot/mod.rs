@@ -52,6 +52,7 @@ pub struct OneBotAdapter {
     store: Store,
     http: reqwest::Client,
     link: Mutex<Option<Arc<WsLink>>>,
+    live_id: std::sync::Mutex<Option<String>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -88,7 +89,7 @@ impl OneBotAdapter {
                 id: cfg.id.clone(),
                 channel: "onebot".into(),
                 profile: profile.as_str().into(),
-                self_id: cfg.self_id.clone(),
+                self_id: None,
             },
             profile,
             mode,
@@ -102,12 +103,54 @@ impl OneBotAdapter {
             store,
             http: reqwest::Client::new(),
             link: Mutex::new(None),
+            live_id: std::sync::Mutex::new(None),
         })
     }
 
     async fn set_link(&self, link: Option<Arc<WsLink>>) {
         *self.link.lock().await = link;
         self.up.store(self.link.lock().await.is_some() || self.api_base_url.is_some(), Ordering::Relaxed);
+    }
+
+    fn current_self_id(&self) -> Option<String> {
+        self.live_id.lock().ok().and_then(|g| g.clone())
+    }
+
+    fn adopt_self_id(&self, id: String) -> bool {
+        let Ok(mut g) = self.live_id.lock() else {
+            return false;
+        };
+        if g.as_deref() == Some(id.as_str()) {
+            return false;
+        }
+        *g = Some(id);
+        true
+    }
+
+    async fn publish_self_id(&self, ingress: &IngressTx, id: String) {
+        if !self.adopt_self_id(id.clone()) {
+            return;
+        }
+        tracing::info!(account = %self.meta.id, self_id = %id, "onebot login");
+        let _ = ingress
+            .send(Ingress::Connection {
+                account: self.meta.id.clone(),
+                up: true,
+                detail: "login".into(),
+                self_id: Some(id),
+            })
+            .await;
+    }
+
+    async fn refresh_self_id(&self, ingress: &IngressTx) {
+        match self.action("get_login_info", json!({})).await {
+            Ok(data) => {
+                if let Some(id) = data.get("user_id").and_then(json_id) {
+                    self.publish_self_id(ingress, id).await;
+                }
+            }
+            Err(e) => tracing::warn!(account = %self.meta.id, "get_login_info: {e}"),
+        }
     }
 
     async fn action(&self, name: &str, params: Value) -> Result<Value> {
@@ -165,6 +208,9 @@ impl OneBotAdapter {
             tracing::warn!(account = %self.meta.id, "dropping non-json onebot frame");
             return;
         };
+        if let Some(id) = value.get("self_id").and_then(json_id) {
+            self.publish_self_id(ingress, id).await;
+        }
         if let (Some(echo), Some(_)) = (
             value.get("echo").and_then(Value::as_str).map(ToOwned::to_owned),
             value.get("retcode"),
@@ -302,7 +348,7 @@ impl OneBotAdapter {
     }
 
     async fn pump_ws<S>(
-        &self,
+        self: &Arc<Self>,
         ingress: IngressTx,
         ws: tokio_tungstenite::WebSocketStream<S>,
         up: &str,
@@ -322,8 +368,14 @@ impl OneBotAdapter {
                 account: self.meta.id.clone(),
                 up: true,
                 detail: up.into(),
+                self_id: self.current_self_id(),
             })
             .await;
+        let login = self.clone();
+        let login_ingress = ingress.clone();
+        tokio::spawn(async move {
+            login.refresh_self_id(&login_ingress).await;
+        });
         let writer = tokio::spawn(async move {
             while let Some(frame) = rx.recv().await {
                 if sink.send(Message::Text(frame.into())).await.is_err() {
@@ -345,6 +397,7 @@ impl OneBotAdapter {
                 account: self.meta.id.clone(),
                 up: false,
                 detail: down.into(),
+                self_id: self.current_self_id(),
             })
             .await;
     }
@@ -410,7 +463,9 @@ fn forward_ws_request(
 #[async_trait]
 impl Adapter for OneBotAdapter {
     fn account(&self) -> AccountMeta {
-        self.meta.clone()
+        let mut meta = self.meta.clone();
+        meta.self_id = self.current_self_id();
+        meta
     }
 
     fn capabilities(&self) -> Capabilities {

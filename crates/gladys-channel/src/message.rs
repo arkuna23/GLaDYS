@@ -283,5 +283,6 @@ pub enum Ingress {
         account: String,
         up: bool,
         detail: String,
+        self_id: Option<String>,
     },
 }
