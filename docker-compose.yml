@@ -1,0 +1,17 @@
+services:
+  agent:
+    build: .
+    image: gladys-agent
+    container_name: gladys-agent
+    network_mode: host
+    env_file:
+      - ./workspace/.env
+    volumes:
+      - ./workspace/home:/workspace
+      - ./workspace/.pi:/root/.pi
+      - ./workspace/scheduler.toml:/etc/gladys/scheduler.toml:ro
+      - ./target/release/gladys-scheduler:/usr/local/bin/gladys-scheduler:ro
+    working_dir: /workspace
+    environment:
+      HOME: /root
+    restart: unless-stopped

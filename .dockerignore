@@ -1,0 +1,13 @@
+/target
+/data
+.git
+*.db
+*.db-wal
+*.db-shm
+channel.toml
+memory.toml
+gateway.toml
+scheduler.toml
+workspace
+.env
+.env.*
