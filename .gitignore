@@ -1,0 +1,14 @@
+/target
+/data
+*.db
+*.db-wal
+*.db-shm
+.idea
+.vscode
+
+# runtime config — commit examples only
+channel.toml
+memory.toml
+.env
+.env.*
+!.env.example

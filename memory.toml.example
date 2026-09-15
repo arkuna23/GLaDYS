@@ -1,0 +1,5 @@
+bind = "127.0.0.1:3921"
+data_dir = "./data/memory"
+token_env = "GLADYS_MEMORY_TOKEN"
+pack_limit = 20
+pack_max_chars = 4000

@@ -1,0 +1,16 @@
+bind = "127.0.0.1:3920"
+data_dir = "./data/channel"
+token_env = "GLADYS_CHANNEL_TOKEN"
+debug = false
+# public_base = "http://127.0.0.1:3920"
+
+[[accounts]]
+id = "qq-main"
+channel = "onebot"
+profile = "napcat"          # or "public"
+mode = "reverse_ws"         # or "forward_ws"
+listen = "0.0.0.0:6700"
+# ws_url = "ws://127.0.0.1:3001"
+# api_base_url = "http://127.0.0.1:3000"
+access_token_env = "NAPCAT_TOKEN"
+download_media = true
