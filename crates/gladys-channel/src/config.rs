@@ -21,7 +21,7 @@ pub struct Config {
 }
 
 fn default_bind() -> String {
-    "127.0.0.1:3920".into()
+    "0.0.0.0:3920".into()
 }
 
 fn default_data_dir() -> PathBuf {

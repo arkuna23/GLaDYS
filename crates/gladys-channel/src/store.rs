@@ -414,7 +414,11 @@ fn row_to_envelope(row: &rusqlite::Row<'_>) -> rusqlite::Result<Envelope> {
     let reply_to_platform_id: Option<String> = row.get(11)?;
     let reply_to = match (reply_to_id, reply_to_platform_id) {
         (None, None) => None,
-        (id, platform_id) => Some(ReplyTo { id, platform_id }),
+        (id, platform_id) => Some(ReplyTo {
+            id,
+            platform_id,
+            sender: None,
+        }),
     };
     Ok(Envelope {
         id: row.get(0)?,

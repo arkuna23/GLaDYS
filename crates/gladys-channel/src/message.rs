@@ -74,6 +74,8 @@ pub struct ReplyTo {
     pub id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, schemars::JsonSchema)]

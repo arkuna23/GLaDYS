@@ -223,12 +223,92 @@ impl OneBotAdapter {
         let Some(mut parsed) = parse_frame(&self.meta.id, &value) else {
             return;
         };
-        if let Ingress::Message(env) = &mut parsed
-            && self.download_media
-        {
-            self.fill_blobs(&mut env.parts).await;
+        if let Ingress::Message(env) = &mut parsed {
+            if self.download_media {
+                self.fill_blobs(&mut env.parts).await;
+            }
+            self.fill_reply_sender(env).await;
         }
         let _ = ingress.send(parsed).await;
+    }
+
+    fn parts_with_blobs(&self, parts: &[Part]) -> Vec<Part> {
+        parts.iter().cloned().map(|p| self.embed_blob(p)).collect()
+    }
+
+    fn embed_blob(&self, part: Part) -> Part {
+        let id = match &part {
+            Part::Image { blob_id: Some(id), .. }
+            | Part::Audio { blob_id: Some(id), .. }
+            | Part::Video { blob_id: Some(id), .. }
+            | Part::File { blob_id: Some(id), .. } => id.clone(),
+            _ => return part,
+        };
+        let Some(file) = self.blob_as_base64(&id) else {
+            return part;
+        };
+        match part {
+            Part::Image { mime, filename, blob_id, .. } => Part::Image {
+                url: Some(file),
+                blob_id,
+                mime,
+                filename,
+            },
+            Part::Audio { mime, filename, blob_id, .. } => Part::Audio {
+                url: Some(file),
+                blob_id,
+                mime,
+                filename,
+            },
+            Part::Video { mime, filename, blob_id, .. } => Part::Video {
+                url: Some(file),
+                blob_id,
+                mime,
+                filename,
+            },
+            Part::File { mime, filename, blob_id, .. } => Part::File {
+                url: Some(file),
+                blob_id,
+                mime,
+                filename,
+            },
+            other => other,
+        }
+    }
+
+    fn blob_as_base64(&self, id: &str) -> Option<String> {
+        use base64::Engine;
+        let (path, _) = self.store.get_blob(id).ok().flatten()?;
+        let bytes = std::fs::read(path).ok()?;
+        Some(format!(
+            "base64://{}",
+            base64::engine::general_purpose::STANDARD.encode(bytes)
+        ))
+    }
+
+    async fn fill_reply_sender(&self, env: &mut Envelope) {
+        let Some(pid) = env
+            .reply_to
+            .as_ref()
+            .and_then(|r| r.platform_id.clone())
+        else {
+            return;
+        };
+        let sender = if let Ok(Some(orig)) =
+            self.store.get_by_platform("onebot", &self.meta.id, &pid)
+        {
+            Some(orig.sender.id)
+        } else {
+            match self.fetch_message(&pid).await {
+                Ok(Some(orig)) => Some(orig.sender.id),
+                _ => None,
+            }
+        };
+        if let Some(id) = sender
+            && let Some(rt) = env.reply_to.as_mut()
+        {
+            rt.sender = Some(id);
+        }
     }
 
     async fn fill_blobs(&self, parts: &mut [Part]) {
@@ -484,7 +564,8 @@ impl Adapter for OneBotAdapter {
     }
 
     async fn send(&self, dest: &Conversation, parts: &[Part]) -> Result<SendAck> {
-        let (message, dropped) = parts_to_segments(parts);
+        let parts = self.parts_with_blobs(parts);
+        let (message, dropped) = parts_to_segments(&parts);
         if message.is_empty() {
             return Err(ChannelError::EmptySend);
         }

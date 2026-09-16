@@ -65,6 +65,9 @@ struct SendArgs {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct BlobUploadArgs {}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct GetArgs {
     account: String,
     #[serde(default)]
@@ -136,6 +139,14 @@ impl ChannelMcp {
         Self::wrap(self.service.capabilities(CapabilitiesParams {
             account: args.account,
         }))
+    }
+
+    #[tool(description = "Get a one-time PUT URL. Upload a local file with HTTP PUT (curl -T file URL), then channel_send with blob_id. Same for image/audio/video/file.")]
+    async fn channel_blob_upload_url(
+        &self,
+        Parameters(_args): Parameters<BlobUploadArgs>,
+    ) -> Result<CallToolResult, rmcp::ErrorData> {
+        Self::wrap(Ok(self.service.blob_upload_slot().await))
     }
 
     #[tool(description = "Send a message using common parts")]
@@ -265,7 +276,7 @@ impl ServerHandler for ChannelMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions(
-                "GLaDYS channel tools. Use channel_capabilities then channel_call for native ops.",
+                "GLaDYS channel tools. For media: channel_blob_upload_url, HTTP PUT the file to that url, then channel_send with blob_id. Use channel_capabilities then channel_call for native ops.",
             )
     }
 }

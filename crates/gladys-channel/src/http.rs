@@ -4,7 +4,7 @@ use axum::extract::{Path, Query, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::tower::StreamableHttpService;
@@ -23,6 +23,7 @@ pub struct AppState {
     pub token: String,
     pub debug: bool,
     pub loopback_blobs: bool,
+    pub blob_base: String,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -33,8 +34,10 @@ pub fn router(state: AppState) -> Router {
         StreamableHttpServerConfig::default(),
     );
 
-    let protected_mcp = Router::new()
+    let protected = Router::new()
         .nest_service("/mcp", mcp)
+        .route("/v1/blobs", post(put_blob))
+        .route("/v1/blobs/uploads", post(blob_upload_slot))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -43,11 +46,12 @@ pub fn router(state: AppState) -> Router {
     let mut app = Router::new()
         .route("/health", get(health))
         .route("/v1/gateway", get(gateway_ws::upgrade))
-        .route("/v1/blobs/{id}", get(get_blob));
+        .route("/v1/blobs/{id}", get(get_blob))
+        .route("/v1/blobs/upload/{ticket}", put(put_blob_ticket));
     if state.debug {
         app = app.route("/v1/debug/inbound", post(debug_inbound));
     }
-    app.merge(protected_mcp).with_state(state)
+    app.merge(protected).with_state(state)
 }
 
 async fn health() -> &'static str {
@@ -112,6 +116,55 @@ async fn get_blob(
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
 }
+
+#[derive(Deserialize)]
+struct PutBlobQuery {
+    #[serde(default)]
+    filename: Option<String>,
+}
+
+async fn put_blob(
+    State(state): State<AppState>,
+    Query(query): Query<PutBlobQuery>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+ ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let mime = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(ToOwned::to_owned);
+    let id = state
+        .service
+        .put_blob(&body, mime.as_deref(), query.filename.as_deref())
+        .map_err(map_err)?;
+    let url = crate::config::hosted_blob_url(&state.blob_base, &id);
+    Ok(Json(serde_json::json!({
+        "id": id,
+        "blob_id": id,
+        "url": url,
+        "mime": mime,
+    })))
+}
+
+
+async fn blob_upload_slot(State(state): State<AppState>) -> Json<serde_json::Value> {
+    Json(state.service.blob_upload_slot().await)
+ }
+
+async fn put_blob_ticket(
+    State(state): State<AppState>,
+    Path(ticket): Path<String>,
+    Query(query): Query<PutBlobQuery>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+ ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    if !ticket.chars().all(|c| c.is_ascii_alphanumeric())
+        || !state.service.consume_upload_ticket(&ticket).await
+    {
+        return Err((StatusCode::NOT_FOUND, "not found".into()));
+    }
+    put_blob(State(state), Query(query), headers, body).await
+ }
 #[derive(Deserialize)]
 struct DebugInbound {
     #[serde(default)]

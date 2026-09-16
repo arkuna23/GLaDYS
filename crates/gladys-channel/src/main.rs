@@ -27,7 +27,8 @@ async fn main() -> Result<()> {
             service,
             token,
             debug,
-            loopback_blobs: cfg.bind_is_loopback(),
+            loopback_blobs: true,
+            blob_base: cfg.blob_base(),
         },
     )
     .await?;

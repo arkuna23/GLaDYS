@@ -55,6 +55,7 @@ fn parse_message(account: &str, value: &Value, echo: bool) -> Option<Envelope> {
         reply_to: reply_pid.map(|platform_id| ReplyTo {
             id: None,
             platform_id: Some(platform_id),
+            sender: None,
         }),
         parts,
         native: Some(NativePayload {

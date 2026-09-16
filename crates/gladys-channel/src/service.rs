@@ -119,6 +119,8 @@ pub struct Service {
     adapters: Arc<HashMap<String, Arc<dyn Adapter>>>,
     bus: broadcast::Sender<BusEvent>,
     idem: Arc<Mutex<HashMap<String, (Instant, IdemValue)>>>,
+    blob_base: String,
+    tickets: Arc<Mutex<HashMap<String, Instant>>>,
 }
 
 #[derive(Clone)]
@@ -129,12 +131,22 @@ enum IdemValue {
 
 impl Service {
     pub fn new(store: Store, adapters: HashMap<String, Arc<dyn Adapter>>) -> Self {
+        Self::with_blob_base(store, adapters, "http://127.0.0.1:3920".into())
+    }
+
+    pub fn with_blob_base(
+        store: Store,
+        adapters: HashMap<String, Arc<dyn Adapter>>,
+        blob_base: String,
+    ) -> Self {
         let (bus, _) = broadcast::channel(256);
         Self {
             store,
             adapters: Arc::new(adapters),
             bus,
             idem: Arc::new(Mutex::new(HashMap::new())),
+            blob_base,
+            tickets: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -146,7 +158,7 @@ impl Service {
             let adapter = build_adapter(account, store.clone(), &cfg.blob_base())?;
             adapters.insert(account.id.clone(), adapter);
         }
-        Ok(Self::new(store, adapters))
+        Ok(Self::with_blob_base(store, adapters, cfg.blob_base()))
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<BusEvent> {
@@ -381,6 +393,35 @@ impl Service {
 
     pub fn blob(&self, id: &str) -> Result<Option<(std::path::PathBuf, Option<String>)>> {
         self.store.get_blob(id)
+    }
+
+    pub fn put_blob(&self, bytes: &[u8], mime: Option<&str>, filename: Option<&str>) -> Result<String> {
+        if bytes.is_empty() {
+            return Err(ChannelError::Invalid("empty blob".into()));
+        }
+        self.store.save_blob(bytes, mime, filename)
+    }
+
+
+    pub async fn blob_upload_slot(&self) -> Value {
+        self.gc_tickets().await;
+        let ticket = ulid::Ulid::generate().to_string();
+        self.tickets.lock().await.insert(ticket.clone(), Instant::now());
+        let url = format!(
+            "{}/v1/blobs/upload/{ticket}",
+            self.blob_base.trim_end_matches('/')
+        );
+        serde_json::json!({ "method": "PUT", "url": url })
+    }
+
+    pub async fn consume_upload_ticket(&self, ticket: &str) -> bool {
+        self.gc_tickets().await;
+        self.tickets.lock().await.remove(ticket).is_some()
+    }
+
+    async fn gc_tickets(&self) {
+        let mut map = self.tickets.lock().await;
+        map.retain(|_, t| t.elapsed() < Duration::from_secs(600));
     }
 }
 

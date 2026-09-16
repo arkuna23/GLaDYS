@@ -44,6 +44,7 @@ async fn hello_inbound_and_send() {
         token: "test-token".into(),
         debug: true,
         loopback_blobs: true,
+        blob_base: "http://127.0.0.1:3920".into(),
     });
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
