@@ -11,14 +11,13 @@ owners = ["onebot:123456"]
 
 [agent]
 kind = "acp"
-command = "docker"
-args = ["exec", "-i", "-w", "/workspace", "gladys-agent", "pi-acp"]
+command = "pi-acp"
 cwd = "/workspace"
 
 [policy]
 group_mode = "whitelist"
 dm_mode = "blacklist"
-groups = ["onebot:group:477517182"]
+groups = ["onebot:group:123456"]
 dms = []
 
 [[mcp]]

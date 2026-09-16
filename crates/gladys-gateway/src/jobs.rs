@@ -265,5 +265,6 @@ fn envelope(job: &Job, text: &str) -> Envelope {
         parts: vec![Part::Text {
             text: text.to_string(),
         }],
+        reply_to: None,
     }
 }

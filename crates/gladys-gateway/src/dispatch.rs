@@ -107,6 +107,10 @@ async fn handle(inner: Arc<Inner>, env: Envelope) -> Result<()> {
         .as_deref()
         .map(|id| env.mentions_user(id))
         .unwrap_or(false);
+    let reply = me
+        .as_deref()
+        .map(|id| env.replies_to(id))
+        .unwrap_or(false);
     let dm = env.conversation.kind == ConversationKind::Dm;
     let owner = inner.policy.is_owner(&env.channel, &env.sender.id);
     let text = env.flatten_text();
@@ -136,7 +140,7 @@ async fn handle(inner: Arc<Inner>, env: Envelope) -> Result<()> {
         return Ok(());
     }
 
-    let direct = dm || mentioned;
+    let direct = dm || mentioned || reply;
     enqueue(inner, env, direct).await
 }
 

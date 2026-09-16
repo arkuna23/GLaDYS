@@ -7,7 +7,7 @@ use gladys_gateway::io::{RecChannel, RecMemory};
 use gladys_gateway::policy::Policy;
 use gladys_gateway::store::Store;
 use gladys_gateway::types::{
-    Actor, Conversation, ConversationKind, Envelope, ListMode, MentionTarget, Part,
+    Actor, Conversation, ConversationKind, Envelope, ListMode, MentionTarget, Part, ReplyTo,
 };
 
 fn harness(
@@ -66,6 +66,7 @@ fn env(
             name: None,
         },
         parts,
+        reply_to: None,
     }
 }
 
@@ -115,6 +116,22 @@ async fn group_idle_vs_mention() {
     ))
     .await
     .unwrap();
+    wait(Duration::from_millis(10)).await;
+    assert_eq!(fake.prompts.lock().await.len(), 1);
+    assert!(!fake.prompts.lock().await[0].idle);
+}
+
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn group_reply_to_bot_is_direct() {
+    let (d, fake, _, _) = harness("ok", Duration::from_millis(10), Duration::from_secs(30));
+    d.set_self_id("main".into(), "bot".into()).await;
+    let mut e = env(ConversationKind::Group, "1", "u", "followup", None);
+    e.reply_to = Some(ReplyTo {
+        platform_id: Some("42".into()),
+        sender: Some("bot".into()),
+    });
+    d.handle(e).await.unwrap();
     wait(Duration::from_millis(10)).await;
     assert_eq!(fake.prompts.lock().await.len(), 1);
     assert!(!fake.prompts.lock().await[0].idle);

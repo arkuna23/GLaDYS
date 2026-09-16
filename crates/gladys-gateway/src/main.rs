@@ -25,6 +25,14 @@ async fn main() -> Result<()> {
     if cfg.agent.kind != "acp" {
         anyhow::bail!("only agent.kind = acp is supported");
     }
+    let (agent_cmd, agent_args) = match std::env::var("GLADYS_AGENT_COMMAND") {
+        Ok(cmd) if !cmd.is_empty() => (cmd, Vec::new()),
+        _ => (cfg.agent.command.clone(), cfg.agent.args.clone()),
+    };
+    let agent_cwd = std::env::var("GLADYS_ACP_CWD")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .or(cfg.agent.cwd.clone());
     std::fs::create_dir_all(&cfg.data_dir)?;
     let store = Store::open(cfg.data_dir.join("gateway.db"))?;
     let slot = Arc::new(ChannelSlot::default());
@@ -39,9 +47,9 @@ async fn main() -> Result<()> {
         cfg.debounce(),
         cfg.idle(),
         Arc::new(AcpBackend::new(
-            cfg.agent.command.clone(),
-            cfg.agent.args.clone(),
-            cfg.agent.cwd.clone(),
+            agent_cmd,
+            agent_args,
+            agent_cwd,
             cfg.mcp.clone(),
             store.clone(),
         )),

@@ -31,13 +31,24 @@ impl Policy {
     }
 }
 
+
+fn has_new_cmd(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let mut from = 0;
+    while let Some(pos) = text[from..].find("/new") {
+        let at = from + pos;
+        if at == 0 || bytes[at - 1].is_ascii_whitespace() || bytes[at - 1] == b']' {
+            return true;
+        }
+        from = at + 1;
+    }
+    false
+}
 pub fn is_new_command(dm: bool, mentioned: bool, owner: bool, text: &str) -> bool {
     if !owner {
         return false;
     }
-    let has_cmd = text
-        .split_whitespace()
-        .any(|w| w == "/new" || w.starts_with("/new"));
+    let has_cmd = has_new_cmd(text);
     if !has_cmd {
         return false;
     }
@@ -86,5 +97,6 @@ mod tests {
         assert!(!is_new_command(true, false, false, "/new"));
         assert!(!is_new_command(false, false, true, "/new please"));
         assert!(is_new_command(false, true, true, "@bot /new"));
+        assert!(is_new_command(false, true, true, "[CQ:at,qq=1]/new"));
     }
 }

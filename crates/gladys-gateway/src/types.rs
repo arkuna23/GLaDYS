@@ -83,6 +83,44 @@ pub enum Part {
         #[serde(default)]
         filename: Option<String>,
     },
+    Audio {
+        #[serde(default)]
+        url: Option<String>,
+        #[serde(default)]
+        blob_id: Option<String>,
+        #[serde(default)]
+        mime: Option<String>,
+        #[serde(default)]
+        filename: Option<String>,
+    },
+    Video {
+        #[serde(default)]
+        url: Option<String>,
+        #[serde(default)]
+        blob_id: Option<String>,
+        #[serde(default)]
+        mime: Option<String>,
+        #[serde(default)]
+        filename: Option<String>,
+    },
+    File {
+        #[serde(default)]
+        url: Option<String>,
+        #[serde(default)]
+        blob_id: Option<String>,
+        #[serde(default)]
+        mime: Option<String>,
+        #[serde(default)]
+        filename: Option<String>,
+    },
+    Reply {
+        platform_id: String,
+    },
+    Unknown {
+        native_type: String,
+        #[serde(default)]
+        data: serde_json::Value,
+    },
     #[serde(other)]
     Other,
 }
@@ -92,6 +130,14 @@ pub struct Actor {
     pub id: String,
     #[serde(default)]
     pub name: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+pub struct ReplyTo {
+    #[serde(default)]
+    pub platform_id: Option<String>,
+    #[serde(default)]
+    pub sender: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -106,6 +152,8 @@ pub struct Envelope {
     pub sender: Actor,
     #[serde(default)]
     pub parts: Vec<Part>,
+    #[serde(default)]
+    pub reply_to: Option<ReplyTo>,
 }
 
 impl Envelope {
@@ -120,41 +168,114 @@ impl Envelope {
     pub fn mentions_user(&self, user_id: &str) -> bool {
         self.parts.iter().any(|p| matches!(p, Part::Mention { target: MentionTarget::User, id: Some(id) } if id == user_id))
     }
+
+    pub fn replies_to(&self, user_id: &str) -> bool {
+        self.reply_to.as_ref().and_then(|r| r.sender.as_deref()) == Some(user_id)
+    }
 }
 
 pub fn flatten_parts(parts: &[Part]) -> String {
     let mut out = String::new();
     for part in parts {
         match part {
-            Part::Text { text } => {
-                if !out.is_empty() {
-                    out.push(' ');
-                }
-                out.push_str(text);
-            }
+            Part::Text { text } => out.push_str(&cq_escape_text(text)),
             Part::Mention {
                 target: MentionTarget::All,
                 ..
-            } => {
-                if !out.is_empty() {
-                    out.push(' ');
-                }
-                out.push_str("@all");
-            }
+            } => out.push_str(&cq("at", &[("qq", "all")])),
             Part::Mention {
                 target: MentionTarget::User,
                 id,
-            } => {
-                if !out.is_empty() {
-                    out.push(' ');
-                }
-                out.push('@');
-                out.push_str(id.as_deref().unwrap_or("user"));
-            }
-            _ => {}
+            } => out.push_str(&cq("at", &[("qq", id.as_deref().unwrap_or("user"))])),
+            Part::Image {
+                url,
+                blob_id,
+                filename,
+                ..
+            } => out.push_str(&media_cq("image", url, blob_id, filename)),
+            Part::Audio {
+                url,
+                blob_id,
+                filename,
+                ..
+            } => out.push_str(&media_cq("record", url, blob_id, filename)),
+            Part::Video {
+                url,
+                blob_id,
+                filename,
+                ..
+            } => out.push_str(&media_cq("video", url, blob_id, filename)),
+            Part::File {
+                url,
+                blob_id,
+                filename,
+                ..
+            } => out.push_str(&media_cq("file", url, blob_id, filename)),
+            Part::Reply { platform_id } => out.push_str(&cq("reply", &[("id", platform_id)])),
+            Part::Unknown { native_type, data } => out.push_str(&unknown_cq(native_type, data)),
+            Part::Other => out.push_str("[CQ:other]"),
         }
     }
     out
+}
+
+fn cq_escape_text(s: &str) -> String {
+    s.replace('&', "&amp;").replace('[', "&#91;").replace(']', "&#93;")
+}
+
+fn cq_escape_val(s: &str) -> String {
+    cq_escape_text(s).replace(',', "&#44;")
+}
+
+fn cq(ty: &str, params: &[(&str, &str)]) -> String {
+    let mut out = String::from("[CQ:");
+    out.push_str(ty);
+    for (k, v) in params {
+        if v.is_empty() {
+            continue;
+        }
+        out.push(',');
+        out.push_str(k);
+        out.push('=');
+        out.push_str(&cq_escape_val(v));
+    }
+    out.push(']');
+    out
+}
+
+fn media_cq(
+    kind: &str,
+    url: &Option<String>,
+    blob_id: &Option<String>,
+    filename: &Option<String>,
+ ) -> String {
+    if let Some(u) = url.as_deref().filter(|s| !s.is_empty()) {
+        return cq(kind, &[("url", u)]);
+    }
+    if let Some(f) = filename.as_deref().filter(|s| !s.is_empty()) {
+        return cq(kind, &[("file", f)]);
+    }
+    if let Some(b) = blob_id.as_deref().filter(|s| !s.is_empty()) {
+        return cq(kind, &[("file", b)]);
+    }
+    cq(kind, &[])
+}
+
+fn unknown_cq(native_type: &str, data: &serde_json::Value) -> String {
+    let mut params = Vec::new();
+    if let Some(obj) = data.as_object() {
+        for (k, v) in obj {
+            let s = match v {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::Bool(b) => b.to_string(),
+                _ => continue,
+            };
+            params.push((k.as_str(), s));
+        }
+    }
+    let refs: Vec<(&str, &str)> = params.iter().map(|(k, v)| (*k, v.as_str())).collect();
+    cq(native_type, &refs)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -225,5 +346,40 @@ impl ListMode {
             Some("blacklist") => Self::Blacklist,
             _ => default,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn flatten_uses_cq() {
+        let s = flatten_parts(&[
+            Part::Reply {
+                platform_id: "9".into(),
+            },
+            Part::Mention {
+                target: MentionTarget::User,
+                id: Some("1".into()),
+            },
+            Part::Text {
+                text: "看".into(),
+            },
+            Part::Image {
+                url: Some("http://x".into()),
+                blob_id: None,
+                mime: None,
+                filename: None,
+            },
+            Part::Unknown {
+                native_type: "face".into(),
+                data: serde_json::json!({"id": "32"}),
+            },
+        ]);
+        assert_eq!(
+            s,
+            "[CQ:reply,id=9][CQ:at,qq=1]看[CQ:image,url=http://x][CQ:face,id=32]"
+        );
     }
 }

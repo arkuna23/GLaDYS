@@ -89,6 +89,7 @@ async fn scheduler_trigger(
                     .unwrap_or_default()
             }),
         }],
+        reply_to: None,
     };
     match state.dispatch.handle_scheduler(env).await {
         Ok(id) => Ok(Json(serde_json::json!({"ok": true, "id": id}))),
