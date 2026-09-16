@@ -10,7 +10,7 @@ services:
       - ./workspace/home:/workspace
       - ./workspace/.pi:/root/.pi
       - ./workspace/scheduler.toml:/etc/gladys/scheduler.toml:ro
-      - ./target/release/gladys-scheduler:/usr/local/bin/gladys-scheduler:ro
+      - ${GLADYS_SCHEDULER_BIN:-./target/release/gladys-scheduler}:/usr/local/bin/gladys-scheduler:ro
     working_dir: /workspace
     environment:
       HOME: /root

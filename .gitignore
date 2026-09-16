@@ -19,6 +19,7 @@ workspace/*.toml
 workspace/.env
 workspace/data/
 workspace/run/
+/dist/
 .env
 .env.*
 !.env.example

@@ -1,0 +1,26 @@
+{
+  "settings": { "directTools": true },
+  "mcpServers": {
+    "channel": {
+      "type": "http",
+      "url": "http://127.0.0.1:3920/mcp",
+      "headers": { "Authorization": "Bearer ${GLADYS_CHANNEL_TOKEN}" },
+      "directTools": true,
+      "lifecycle": "eager"
+    },
+    "memory": {
+      "type": "http",
+      "url": "http://127.0.0.1:3921/mcp",
+      "headers": { "Authorization": "Bearer ${GLADYS_MEMORY_TOKEN}" },
+      "directTools": true,
+      "lifecycle": "eager"
+    },
+    "scheduler": {
+      "type": "http",
+      "url": "http://127.0.0.1:3923/mcp",
+      "headers": { "Authorization": "Bearer ${GLADYS_SCHEDULER_TOKEN}" },
+      "directTools": true,
+      "lifecycle": "eager"
+    }
+  }
+}

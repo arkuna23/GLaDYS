@@ -1,0 +1,4 @@
+{
+  "defaultProjectTrust": "always",
+  "packages": ["/usr/local/lib/node_modules/pi-mcp-adapter"]
+}

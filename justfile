@@ -7,17 +7,25 @@ default:
 init:
     ./scripts/init.sh
 
+# Release binaries + scripts + examples into dist/gladys/ and a tar.gz.
+package:
+    ./scripts/package.sh
 
-# Shell into the agent container.
-shell:
-    ./scripts/shell.sh
+# Shell into workspace (pass --docker for the agent container).
+shell *args:
+    ./scripts/shell.sh {{args}}
 
-# Start docker agent+scheduler and host Channel/Memory/Gateway.
-start:
-    ./scripts/start.sh
+# Host Channel/Memory/Gateway. Use `just start -- --docker` for containers.
+start *args:
+    ./scripts/start.sh {{args}}
+
+
+# Agent + scheduler in Docker.
+start-docker:
+    ./scripts/start.sh --docker
 
 stop-host:
     ./scripts/stop-host.sh
 
-stop:
-    ./scripts/stop.sh
+stop *args:
+    ./scripts/stop.sh {{args}}

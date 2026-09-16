@@ -7,7 +7,9 @@ RUN apt-get update \
         jq ripgrep fd-find \
     && ln -sf /usr/bin/python3 /usr/local/bin/python \
     && ln -sf /usr/bin/fdfind /usr/local/bin/fd \
-    && npm install -g --ignore-scripts @earendil-works/pi-coding-agent pi-acp pi-mcp-adapter \
+    && npm install -g @earendil-works/pi-coding-agent pi-acp pi-mcp-adapter \
+    && command -v pi \
+    && command -v pi-acp \
     && rm -rf /var/lib/apt/lists/*
 COPY docker/entrypoint.sh /entrypoint.sh
 COPY docker/scheduler.toml /etc/gladys/scheduler.toml

@@ -9,5 +9,6 @@ memory.toml
 gateway.toml
 scheduler.toml
 workspace
+/dist
 .env
 .env.*
