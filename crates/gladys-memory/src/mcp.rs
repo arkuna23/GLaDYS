@@ -47,109 +47,86 @@ impl MemoryMcp {
     }
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct WriteArgs {
-    layer: Layer,
-    text: String,
-    #[serde(default)]
-    channel: Option<String>,
-    #[serde(default)]
-    conversation: Option<Conversation>,
-    #[serde(default)]
-    person: Option<String>,
+fn need<T>(v: Option<T>, name: &str) -> Result<T, MemoryError> {
+    v.ok_or_else(|| MemoryError::Invalid(format!("{name} required")))
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct IdArgs {
-    id: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SearchArgs {
-    query: String,
+struct MemoryArgs {
+    /// write | get | search | forget | pack
+    op: String,
     #[serde(default)]
     layer: Option<Layer>,
     #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
     channel: Option<String>,
     #[serde(default)]
     conversation: Option<Conversation>,
     #[serde(default)]
     person: Option<String>,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    query: Option<String>,
     #[serde(default)]
     limit: Option<u32>,
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct PackArgs {
-    #[serde(default)]
-    channel: Option<String>,
-    #[serde(default)]
-    conversation: Option<Conversation>,
-    #[serde(default)]
-    person: Option<String>,
-}
-
 #[tool_router]
 impl MemoryMcp {
-    #[tool(description = "Write a memory note into global, conversation, or person layer")]
-    fn memory_write(
+    #[tool(
+        description = "Memory ops. op=write|get|search|forget|pack. Layers: global, conversation (channel+kind+peer), person (channel+person). write needs layer+text; get/forget need id; search needs query."
+    )]
+    fn memory(
         &self,
-        Parameters(args): Parameters<WriteArgs>,
+        Parameters(args): Parameters<MemoryArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        Self::wrap(self.service.write(WriteParams {
-            layer: args.layer,
-            text: args.text,
-            channel: args.channel,
-            conversation: args.conversation,
-            person: args.person,
-        }))
+        Self::wrap(self.dispatch(args))
     }
+}
 
-    #[tool(description = "Get one memory by id")]
-    fn memory_get(
-        &self,
-        Parameters(args): Parameters<IdArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        Self::wrap(self.service.get(GetParams { id: args.id }))
-    }
-
-    #[tool(description = "Full-text search memories")]
-    fn memory_search(
-        &self,
-        Parameters(args): Parameters<SearchArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        Self::wrap(self.service.search(SearchParams {
-            query: args.query,
-            layer: args.layer,
-            channel: args.channel,
-            conversation: args.conversation,
-            person: args.person,
-            limit: args.limit.unwrap_or(50),
-        }))
-    }
-
-    #[tool(description = "Delete a memory by id")]
-    fn memory_forget(
-        &self,
-        Parameters(args): Parameters<IdArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        Self::wrap(
-            self.service
-                .forget(ForgetParams { id: args.id })
-                .map(|()| serde_json::json!({"ok": true})),
-        )
-    }
-
-    #[tool(description = "Pack global + conversation + person memories for the current context")]
-    fn memory_pack(
-        &self,
-        Parameters(args): Parameters<PackArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        Self::wrap(self.service.pack(PackParams {
-            channel: args.channel,
-            conversation: args.conversation,
-            person: args.person,
-        }))
+impl MemoryMcp {
+    fn dispatch(&self, args: MemoryArgs) -> Result<Value, MemoryError> {
+        match args.op.as_str() {
+            "write" => serde_json::to_value(self.service.write(WriteParams {
+                layer: need(args.layer, "layer")?,
+                text: need(args.text, "text")?,
+                channel: args.channel,
+                conversation: args.conversation,
+                person: args.person,
+            })?)
+            .map_err(Into::into),
+            "get" => serde_json::to_value(self.service.get(GetParams {
+                id: need(args.id, "id")?,
+            })?)
+            .map_err(Into::into),
+            "search" => serde_json::to_value(self.service.search(SearchParams {
+                query: need(args.query, "query")?,
+                layer: args.layer,
+                channel: args.channel,
+                conversation: args.conversation,
+                person: args.person,
+                limit: args.limit.unwrap_or(50),
+            })?)
+            .map_err(Into::into),
+            "forget" => {
+                self.service
+                    .forget(ForgetParams {
+                        id: need(args.id, "id")?,
+                    })?;
+                Ok(serde_json::json!({"ok": true}))
+            }
+            "pack" => serde_json::to_value(self.service.pack(PackParams {
+                channel: args.channel,
+                conversation: args.conversation,
+                person: args.person,
+            })?)
+            .map_err(Into::into),
+            other => Err(MemoryError::Invalid(format!(
+                "op must be write|get|search|forget|pack (got {other})"
+            ))),
+        }
     }
 }
 
@@ -158,7 +135,7 @@ impl ServerHandler for MemoryMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions(
-                "GLaDYS memory. Layers: global, conversation (channel+kind+peer), person (channel+person).",
+                "GLaDYS memory. Tool memory: op=write|get|search|forget|pack. Layers: global, conversation (channel+kind+peer), person (channel+person).",
             )
     }
 }

@@ -13,7 +13,7 @@ use crate::config::Config;
 use crate::error::{ChannelError, Result};
 use crate::message::{
     Actor, Conversation, ConversationInfo, Direction, Envelope, Ingress, Part, PlatformEvent,
-    SendAck,
+    ReplyTo, SearchGroup, SendAck,
 };
 use crate::store::Store;
 
@@ -42,6 +42,8 @@ pub struct SendParams {
     pub account: String,
     pub conversation: Conversation,
     pub parts: Vec<Part>,
+    #[serde(default)]
+    pub reply: Option<String>,
     #[serde(default)]
     pub idempotency_key: Option<String>,
 }
@@ -72,10 +74,15 @@ pub struct SearchParams {
     pub account: Option<String>,
     #[serde(default = "default_limit")]
     pub limit: u32,
+    #[serde(default = "default_before")]
+    pub before: u32,
 }
 
 fn default_limit() -> u32 {
     50
+}
+fn default_before() -> u32 {
+    10
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -279,7 +286,15 @@ impl Service {
         if !adapter.capabilities().common.send {
             return Err(ChannelError::unsupported("send", adapter.account().channel));
         }
-        let ack = adapter.send(&params.conversation, &params.parts).await?;
+        let mut parts = params.parts;
+        if let Some(id) = params.reply.as_deref().filter(|s| !s.is_empty())
+            && !parts.iter().any(|p| matches!(p, Part::Reply { .. }))
+        {
+            parts.insert(0, Part::Reply {
+                platform_id: id.to_string(),
+            });
+        }
+        let ack = adapter.send(&params.conversation, &parts).await?;
         let meta = adapter.account();
         let env = Envelope {
             id: ack.id.clone(),
@@ -293,8 +308,12 @@ impl Service {
             },
             ts: now_ts(),
             platform_id: ack.platform_id.clone(),
-            reply_to: None,
-            parts: params.parts,
+            reply_to: params.reply.as_ref().filter(|s| !s.is_empty()).map(|id| ReplyTo {
+                id: None,
+                platform_id: Some(id.clone()),
+                sender: None,
+            }),
+            parts,
             native: None,
             recalled: false,
         };
@@ -306,41 +325,54 @@ impl Service {
         Ok(ack)
     }
 
-    pub async fn get(&self, params: GetParams) -> Result<Envelope> {
+    pub async fn get(&self, params: GetParams) -> Result<SearchGroup> {
         let adapter = self.adapter(&params.account)?;
         let meta = adapter.account();
         if let Some(id) = &params.id
             && let Some(env) = self.store.get_by_id(id)?
         {
-            return Ok(env);
+            return Ok(SearchGroup::from_envelopes(&[env]));
         }
         if let Some(pid) = &params.platform_id {
             if let Some(env) = self.store.get_by_platform(&meta.channel, &params.account, pid)? {
-                return Ok(env);
+                return Ok(SearchGroup::from_envelopes(&[env]));
             }
             if let Some(env) = adapter.fetch_message(pid).await? {
                 let _ = self.store.insert_message(&env)?;
-                return Ok(env);
+                return Ok(SearchGroup::from_envelopes(&[env]));
             }
         }
         Err(ChannelError::NotFound)
     }
 
-    pub fn history(&self, params: HistoryParams) -> Result<Vec<Envelope>> {
+    pub fn history(&self, params: HistoryParams) -> Result<SearchGroup> {
         let adapter = self.adapter(&params.account)?;
         let meta = adapter.account();
-        self.store.history(
+        let envs = self.store.history(
             &meta.channel,
             &params.account,
             &params.conversation,
             params.limit,
             params.before_ts,
-        )
+        )?;
+        if envs.is_empty() {
+            return Ok(SearchGroup::empty(
+                meta.channel,
+                params.account,
+                params.conversation.kind_str(),
+                params.conversation.peer,
+            ));
+        }
+        Ok(SearchGroup::from_envelopes(&envs))
     }
 
-    pub fn search(&self, params: SearchParams) -> Result<Vec<Envelope>> {
-        self.store
-            .search(&params.query, params.account.as_deref(), params.limit)
+    pub fn search(&self, params: SearchParams) -> Result<Vec<crate::message::SearchGroup>> {
+        self.store.search(
+            &params.query,
+            params.account.as_deref(),
+            params.limit,
+            params.before,
+        )
     }
 
     pub async fn recall(&self, params: RecallParams) -> Result<Option<Envelope>> {
@@ -509,10 +541,33 @@ mod tests {
                 query: "alpha".into(),
                 account: Some("lb".into()),
                 limit: 10,
+                before: 10,
             })
             .unwrap();
         assert_eq!(hits.len(), 1);
+        assert!(hits[0].messages.iter().any(|m| m.text.contains("alpha")));
 
+        let hist = svc
+            .history(HistoryParams {
+                account: "lb".into(),
+                conversation: Conversation::dm("1"),
+                limit: 10,
+                before_ts: None,
+            })
+            .unwrap();
+        assert_eq!(hist.kind, "dm");
+        assert_eq!(hist.peer, "1");
+        assert_eq!(hist.messages[0].text, "alpha beta");
+        let got = svc
+            .get(GetParams {
+                account: "lb".into(),
+                id: Some(hist.messages[0].id.clone()),
+                platform_id: None,
+            })
+            .await
+            .unwrap();
+        assert_eq!(got.messages.len(), 1);
+        assert_eq!(got.messages[0].text, "alpha beta");
         let err = svc
             .call(CallParams {
                 account: "qq".into(),

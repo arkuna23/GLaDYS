@@ -46,72 +46,38 @@ impl ChannelMcp {
     }
 }
 
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct ListArgs {}
+fn need<T>(v: Option<T>, name: &str) -> Result<T, ChannelError> {
+    v.ok_or_else(|| ChannelError::Invalid(format!("{name} required")))
+}
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct CapsArgs {
+struct ChannelArgs {
+    /// list | capabilities | blob_upload_url | send | get | history | search | recall | react | conversations
+    op: String,
     #[serde(default)]
     account: Option<String>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SendArgs {
-    account: String,
-    conversation: Conversation,
-    parts: Vec<Part>,
+    #[serde(default)]
+    conversation: Option<Conversation>,
+    #[serde(default)]
+    parts: Option<Vec<Part>>,
+    #[serde(default)]
+    reply: Option<String>,
     #[serde(default)]
     idempotency_key: Option<String>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct BlobUploadArgs {}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct GetArgs {
-    account: String,
     #[serde(default)]
     id: Option<String>,
     #[serde(default)]
     platform_id: Option<String>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct HistoryArgs {
-    account: String,
-    conversation: Conversation,
+    #[serde(default)]
+    query: Option<String>,
     #[serde(default)]
     limit: Option<u32>,
+    #[serde(default)]
+    before: Option<u32>,
     #[serde(default)]
     before_ts: Option<i64>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct SearchArgs {
-    query: String,
     #[serde(default)]
-    account: Option<String>,
-    #[serde(default)]
-    limit: Option<u32>,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct RecallArgs {
-    account: String,
-    platform_id: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct ReactArgs {
-    account: String,
-    platform_id: String,
-    emoji: String,
-}
-
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct ConversationsArgs {
-    #[serde(default)]
-    account: Option<String>,
+    emoji: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -126,130 +92,17 @@ struct CallArgs {
 
 #[tool_router]
 impl ChannelMcp {
-    #[tool(description = "List channel accounts and connection status")]
-    async fn channel_list(&self, Parameters(_args): Parameters<ListArgs>) -> Result<CallToolResult, rmcp::ErrorData> {
-        Self::wrap(Ok(self.service.list_accounts()))
-    }
-
-    #[tool(description = "Discover common and native capabilities for an account")]
-    async fn channel_capabilities(
+    #[tool(
+        description = "Common channel ops. op=list|capabilities|blob_upload_url|send|get|history|search|recall|react|conversations. send: account+conversation+parts (text/mention/image/audio/video/file). Never put CQ codes in text; mention and media are separate parts. reply quotes a platform id. Media: blob_upload_url, PUT the file, send blob_id. get/history/search return compact groups (CQ text)."
+    )]
+    async fn channel(
         &self,
-        Parameters(args): Parameters<CapsArgs>,
+        Parameters(args): Parameters<ChannelArgs>,
     ) -> Result<CallToolResult, rmcp::ErrorData> {
-        Self::wrap(self.service.capabilities(CapabilitiesParams {
-            account: args.account,
-        }))
+        Self::wrap(self.dispatch(args).await)
     }
 
-    #[tool(description = "Get a one-time PUT URL. Upload a local file with HTTP PUT (curl -T file URL), then channel_send with blob_id. Same for image/audio/video/file.")]
-    async fn channel_blob_upload_url(
-        &self,
-        Parameters(_args): Parameters<BlobUploadArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        Self::wrap(Ok(self.service.blob_upload_slot().await))
-    }
-
-    #[tool(description = "Send a message using common parts")]
-    async fn channel_send(
-        &self,
-        Parameters(args): Parameters<SendArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        Self::wrap(
-            self.service
-                .send(SendParams {
-                    account: args.account,
-                    conversation: args.conversation,
-                    parts: args.parts,
-                    idempotency_key: args.idempotency_key,
-                })
-                .await,
-        )
-    }
-
-    #[tool(description = "Get one stored message by id or platform_id")]
-    async fn channel_get(
-        &self,
-        Parameters(args): Parameters<GetArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        Self::wrap(
-            self.service
-                .get(GetParams {
-                    account: args.account,
-                    id: args.id,
-                    platform_id: args.platform_id,
-                })
-                .await,
-        )
-    }
-
-    #[tool(description = "Recent messages in a conversation from local store")]
-    async fn channel_history(
-        &self,
-        Parameters(args): Parameters<HistoryArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        Self::wrap(self.service.history(HistoryParams {
-            account: args.account,
-            conversation: args.conversation,
-            limit: args.limit.unwrap_or(50),
-            before_ts: args.before_ts,
-        }))
-    }
-
-    #[tool(description = "Full-text search over stored messages")]
-    async fn channel_search(
-        &self,
-        Parameters(args): Parameters<SearchArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        Self::wrap(self.service.search(SearchParams {
-            query: args.query,
-            account: args.account,
-            limit: args.limit.unwrap_or(50),
-        }))
-    }
-
-    #[tool(description = "Recall / delete a sent message")]
-    async fn channel_recall(
-        &self,
-        Parameters(args): Parameters<RecallArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        Self::wrap(
-            self.service
-                .recall(RecallParams {
-                    account: args.account,
-                    platform_id: args.platform_id,
-                })
-                .await,
-        )
-    }
-
-    #[tool(description = "React to a message (napcat profile)")]
-    async fn channel_react(
-        &self,
-        Parameters(args): Parameters<ReactArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        Self::wrap(
-            self.service
-                .react(ReactParams {
-                    account: args.account,
-                    platform_id: args.platform_id,
-                    emoji: args.emoji,
-                })
-                .await
-                .map(|_| json_ok()),
-        )
-    }
-
-    #[tool(description = "List known conversations")]
-    async fn channel_conversations(
-        &self,
-        Parameters(args): Parameters<ConversationsArgs>,
-    ) -> Result<CallToolResult, rmcp::ErrorData> {
-        Self::wrap(self.service.conversations(ConversationsParams {
-            account: args.account,
-        }))
-    }
-
-    #[tool(description = "Call a platform-native operation advertised by channel_capabilities")]
+    #[tool(description = "Call a platform-native operation advertised by channel op=capabilities")]
     async fn channel_call(
         &self,
         Parameters(args): Parameters<CallArgs>,
@@ -267,8 +120,86 @@ impl ChannelMcp {
     }
 }
 
-fn json_ok() -> Value {
-    serde_json::json!({"ok": true})
+impl ChannelMcp {
+    async fn dispatch(&self, args: ChannelArgs) -> Result<Value, ChannelError> {
+        match args.op.as_str() {
+            "list" => serde_json::to_value(self.service.list_accounts()).map_err(Into::into),
+            "capabilities" => serde_json::to_value(self.service.capabilities(CapabilitiesParams {
+                account: args.account,
+            })?)
+            .map_err(Into::into),
+            "blob_upload_url" => {
+                serde_json::to_value(self.service.blob_upload_slot().await).map_err(Into::into)
+            }
+            "send" => {
+                let ack = self
+                    .service
+                    .send(SendParams {
+                        account: need(args.account, "account")?,
+                        conversation: need(args.conversation, "conversation")?,
+                        parts: need(args.parts, "parts")?,
+                        reply: args.reply,
+                        idempotency_key: args.idempotency_key,
+                    })
+                    .await?;
+                serde_json::to_value(ack).map_err(Into::into)
+            }
+            "get" => {
+                let group = self
+                    .service
+                    .get(GetParams {
+                        account: need(args.account, "account")?,
+                        id: args.id,
+                        platform_id: args.platform_id,
+                    })
+                    .await?;
+                serde_json::to_value(group).map_err(Into::into)
+            }
+            "history" => serde_json::to_value(self.service.history(HistoryParams {
+                account: need(args.account, "account")?,
+                conversation: need(args.conversation, "conversation")?,
+                limit: args.limit.unwrap_or(50),
+                before_ts: args.before_ts,
+            })?)
+            .map_err(Into::into),
+            "search" => serde_json::to_value(self.service.search(SearchParams {
+                query: need(args.query, "query")?,
+                account: args.account,
+                limit: args.limit.unwrap_or(50),
+                before: args.before.unwrap_or(10),
+            })?)
+            .map_err(Into::into),
+            "recall" => {
+                let v = self
+                    .service
+                    .recall(RecallParams {
+                        account: need(args.account, "account")?,
+                        platform_id: need(args.platform_id, "platform_id")?,
+                    })
+                    .await?;
+                serde_json::to_value(v).map_err(Into::into)
+            }
+            "react" => {
+                self.service
+                    .react(ReactParams {
+                        account: need(args.account, "account")?,
+                        platform_id: need(args.platform_id, "platform_id")?,
+                        emoji: need(args.emoji, "emoji")?,
+                    })
+                    .await?;
+                Ok(serde_json::json!({"ok": true}))
+            }
+            "conversations" => {
+                serde_json::to_value(self.service.conversations(ConversationsParams {
+                    account: args.account,
+                })?)
+                .map_err(Into::into)
+            }
+            other => Err(ChannelError::Invalid(format!(
+                "op must be list|capabilities|blob_upload_url|send|get|history|search|recall|react|conversations (got {other})"
+            ))),
+        }
+    }
 }
 
 #[tool_handler]
@@ -276,7 +207,7 @@ impl ServerHandler for ChannelMcp {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_instructions(
-                "GLaDYS channel tools. For media: channel_blob_upload_url, HTTP PUT the file to that url, then channel_send with blob_id. Use channel_capabilities then channel_call for native ops.",
+                "GLaDYS channel. Tool channel: op=list|capabilities|blob_upload_url|send|get|history|search|recall|react|conversations. send uses parts, never CQ codes in text. send reply = platform message id. Media: op=blob_upload_url, PUT file, send blob_id. Native: channel_call.",
             )
     }
 }

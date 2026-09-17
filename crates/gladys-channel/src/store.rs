@@ -6,7 +6,7 @@ use ulid::Ulid;
 
 use crate::error::{ChannelError, Result};
 use crate::message::{
-    Conversation, ConversationInfo, Envelope, NativePayload, PlatformEvent, ReplyTo,
+    Conversation, ConversationInfo, Envelope, NativePayload, PlatformEvent, ReplyTo, SearchGroup,
 };
 
 const SCHEMA: &str = r#"
@@ -255,6 +255,17 @@ impl Store {
         query: &str,
         account: Option<&str>,
         limit: u32,
+        before: u32,
+    ) -> Result<Vec<SearchGroup>> {
+        let hits = self.search_hits(query, account, limit)?;
+        self.cluster_hits(hits, before.clamp(0, 200))
+}
+
+    fn search_hits(
+        &self,
+        query: &str,
+        account: Option<&str>,
+        limit: u32,
     ) -> Result<Vec<Envelope>> {
         let conn = self.lock()?;
         let limit = limit.clamp(1, 200) as i64;
@@ -310,6 +321,135 @@ impl Store {
             }
         }
         Ok(out)
+    }
+
+    fn cluster_hits(&self, hits: Vec<Envelope>, before: u32) -> Result<Vec<SearchGroup>> {
+        if hits.is_empty() {
+            return Ok(Vec::new());
+        }
+        if before == 0 {
+            let mut groups: Vec<SearchGroup> = hits
+                .into_iter()
+                .map(|e| SearchGroup::from_envelopes(std::slice::from_ref(&e)))
+                .collect();
+            groups.sort_by_key(|g| g.messages.last().map(|m| m.ts).unwrap_or(0));
+            return Ok(groups);
+        }
+        let mut by_conv: std::collections::HashMap<(String, String, String, String), Vec<Envelope>> =
+            std::collections::HashMap::new();
+        for h in hits {
+            let key = (
+                h.channel.clone(),
+                h.account.clone(),
+                h.conversation.kind_str().to_string(),
+                h.conversation.peer.clone(),
+            );
+            by_conv.entry(key).or_default().push(h);
+        }
+        let mut groups = Vec::new();
+        for ((channel, account, kind, peer), mut conv_hits) in by_conv {
+            conv_hits.sort_by(|a, b| a.ts.cmp(&b.ts).then(a.id.cmp(&b.id)));
+            let mut clusters: Vec<Vec<Envelope>> = Vec::new();
+            for h in conv_hits {
+                let merge = if let Some(last) = clusters.last().and_then(|c| c.last()) {
+                    self.msg_gap(&channel, &account, &kind, &peer, last, &h)? <= before as i64
+                } else {
+                    false
+                };
+                if merge {
+                    clusters.last_mut().unwrap().push(h);
+                } else {
+                    clusters.push(vec![h]);
+                }
+            }
+            for cluster in clusters {
+                let window = self.load_window(&cluster, before)?;
+                if !window.is_empty() {
+                    groups.push(SearchGroup::from_envelopes(&window));
+                }
+            }
+        }
+        groups.sort_by_key(|g| g.messages.last().map(|m| m.ts).unwrap_or(0));
+        Ok(groups)
+    }
+
+    fn msg_gap(
+        &self,
+        channel: &str,
+        account: &str,
+        kind: &str,
+        peer: &str,
+        a: &Envelope,
+        b: &Envelope,
+    ) -> Result<i64> {
+        let conn = self.lock()?;
+        let n: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM messages
+             WHERE channel = ?1 AND account = ?2 AND conv_kind = ?3 AND conv_peer = ?4
+               AND (ts > ?5 OR (ts = ?5 AND id > ?6))
+               AND (ts < ?7 OR (ts = ?7 AND id <= ?8))",
+            params![channel, account, kind, peer, a.ts, a.id, b.ts, b.id],
+            |row| row.get(0),
+        )?;
+        Ok(n)
+    }
+
+    fn load_window(&self, cluster: &[Envelope], before: u32) -> Result<Vec<Envelope>> {
+        let first = &cluster[0];
+        let last = cluster.last().unwrap();
+        let conv = &first.conversation;
+        let conn = self.lock()?;
+        let mut prefix = {
+            let mut stmt = conn.prepare(
+                "SELECT id, channel, account, conv_kind, conv_peer, direction, sender_id, sender_name,
+                        ts, platform_id, reply_to_id, reply_to_platform_id, body_json, native_json, recalled
+                 FROM messages
+                 WHERE channel = ?1 AND account = ?2 AND conv_kind = ?3 AND conv_peer = ?4
+                   AND (ts < ?5 OR (ts = ?5 AND id <= ?6))
+                 ORDER BY ts DESC, id DESC LIMIT ?7",
+            )?;
+            let mapped = stmt.query_map(
+                params![
+                    first.channel,
+                    first.account,
+                    conv.kind_str(),
+                    conv.peer,
+                    first.ts,
+                    first.id,
+                    before as i64 + 1
+                ],
+                row_to_envelope,
+            )?;
+            mapped.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        prefix.reverse();
+        let suffix = {
+            let mut stmt = conn.prepare(
+                "SELECT id, channel, account, conv_kind, conv_peer, direction, sender_id, sender_name,
+                        ts, platform_id, reply_to_id, reply_to_platform_id, body_json, native_json, recalled
+                 FROM messages
+                 WHERE channel = ?1 AND account = ?2 AND conv_kind = ?3 AND conv_peer = ?4
+                   AND (ts > ?5 OR (ts = ?5 AND id > ?6))
+                   AND (ts < ?7 OR (ts = ?7 AND id <= ?8))
+                 ORDER BY ts ASC, id ASC",
+            )?;
+            let mapped = stmt.query_map(
+                params![
+                    first.channel,
+                    first.account,
+                    conv.kind_str(),
+                    conv.peer,
+                    first.ts,
+                    first.id,
+                    last.ts,
+                    last.id
+                ],
+                row_to_envelope,
+            )?;
+            mapped.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        prefix.extend(suffix);
+        Ok(prefix)
     }
 
     pub fn mark_recalled(
@@ -518,14 +658,84 @@ mod tests {
         assert_eq!(hist.len(), 2);
         assert_eq!(hist[0].id, "a");
         assert_eq!(hist[1].id, "c");
-        let hits = store.search("hello", Some("qq"), 10).unwrap();
+        let hits = store.search("hello", Some("qq"), 10, 10).unwrap();
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].id, "a");
+        assert_eq!(hits[0].messages.last().unwrap().id, "a");
+        assert!(hits[0].messages.last().unwrap().text.contains("hello"));
         let recalled = store.mark_recalled("onebot", "qq", "p1").unwrap().unwrap();
         assert!(recalled.recalled);
         let id = store.save_blob(b"png-bytes", Some("image/png"), None).unwrap();
         let (path, mime) = store.get_blob(&id).unwrap().unwrap();
         assert_eq!(mime.as_deref(), Some("image/png"));
         assert_eq!(std::fs::read(path).unwrap(), b"png-bytes");
+    }
+
+
+    fn env_peer(id: &str, peer: &str, text: &str, ts: i64) -> Envelope {
+        let mut e = env(id, id, text, ts);
+        e.conversation = Conversation::group(peer);
+        e.platform_id = Some(id.into());
+        e
+    }
+
+    #[test]
+    fn search_groups_merge_split_and_reply() {
+        let dir = std::env::temp_dir().join("gladys-store-search-groups");
+        std::fs::create_dir_all(&dir).expect("temp");
+        let store = Store::memory(&dir).expect("memory store");
+        for i in 1..=12 {
+            let text = if i == 5 || i == 12 {
+                "needle"
+            } else {
+                "noise"
+            };
+            store
+                .insert_message(&env(&format!("m{i}"), &format!("p{i}"), text, i))
+                .unwrap();
+        }
+        let merged = store.search("needle", Some("qq"), 50, 10).unwrap();
+        assert_eq!(merged.len(), 1);
+        let ids: Vec<_> = merged[0].messages.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids.first().copied(), Some("m1"));
+        assert_eq!(ids.last().copied(), Some("m12"));
+        for w in merged[0].messages.windows(2) {
+            assert!(w[0].ts <= w[1].ts);
+        }
+
+        let split = store.search("needle", Some("qq"), 50, 3).unwrap();
+        assert_eq!(split.len(), 2);
+        assert!(split[0].messages.last().unwrap().ts < split[1].messages.last().unwrap().ts);
+
+        store
+            .insert_message(&env_peer("o1", "200", "needle", 100))
+            .unwrap();
+        let cross = store.search("needle", Some("qq"), 50, 10).unwrap();
+        assert_eq!(cross.len(), 2);
+        assert_eq!(cross[0].peer, "100");
+        assert_eq!(cross[1].peer, "200");
+
+        let mut r = env("r1", "pr", "看图", 200);
+        r.reply_to = Some(ReplyTo {
+            id: None,
+            platform_id: Some("pr0".into()),
+            sender: None,
+        });
+        r.parts = vec![
+            Part::text("看图"),
+            Part::Image {
+                blob_id: None,
+                url: Some("http://img".into()),
+                mime: None,
+                filename: None,
+            },
+        ];
+        store.insert_message(&r).unwrap();
+        let g = store.search("看图", Some("qq"), 10, 0).unwrap();
+        assert_eq!(g.len(), 1);
+        assert_eq!(g[0].messages.len(), 1);
+        assert!(g[0].messages[0].text.starts_with("[CQ:reply,id=pr0]"));
+        assert!(g[0].messages[0].text.contains("url=http://img"));
+        assert_eq!(g[0].messages[0].ts, 200);
+        assert_eq!(g[0].names.get("1").map(String::as_str), Some("a"));
     }
 }
