@@ -1,4 +1,0 @@
-bind = "0.0.0.0:3923"
-token_env = "GLADYS_SCHEDULER_TOKEN"
-gateway_url = "http://127.0.0.1:3922"
-gateway_token_env = "GLADYS_GATEWAY_TOKEN"

@@ -2,6 +2,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gladys_gateway::agent::FakeBackend;
+use gladys_gateway::config::DreamConfig;
+use gladys_gateway::daemon::{CommandReg, HandlerReg, RecDaemon, Registry};
 use gladys_gateway::dispatch::Dispatch;
 use gladys_gateway::io::{RecChannel, RecMemory};
 use gladys_gateway::policy::Policy;
@@ -33,6 +35,7 @@ fn harness(
         ch.clone(),
         mem.clone(),
         Store::memory().unwrap(),
+        "en",
     );
     (d, fake, ch, mem)
 }
@@ -201,18 +204,301 @@ async fn steer_while_running() {
     d.handle(env(ConversationKind::Dm, "u1", "u1", "two", None))
         .await
         .unwrap();
+    d.handle(env(ConversationKind::Dm, "u1", "u1", "three", None))
+        .await
+        .unwrap();
     wait(Duration::from_millis(10)).await;
     assert_eq!(fake.prompts.lock().await.len(), 1);
+    assert!(fake.steers.lock().await.is_empty());
+    let _ = hold.send(());
+    wait(Duration::from_millis(1)).await;
     assert_eq!(fake.steers.lock().await.len(), 1);
+    assert!(fake.steers.lock().await[0].1.contains("two"));
+    assert!(fake.steers.lock().await[0].1.contains("three"));
+}
+
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn two_chats_prompt_in_parallel() {
+    let (d, fake, _, _) = harness("ok", Duration::from_millis(10), Duration::from_secs(30));
+    d.set_self_id("main".into(), "bot".into()).await;
+    let hold = fake.set_hold().await;
+    d.handle(env(ConversationKind::Dm, "u1", "u1", "a", None))
+        .await
+        .unwrap();
+    wait(Duration::from_millis(10)).await;
+    assert_eq!(fake.prompts.lock().await.len(), 1);
+    d.handle(env(ConversationKind::Dm, "u2", "u2", "b", None))
+        .await
+        .unwrap();
+    wait(Duration::from_millis(10)).await;
+    assert_eq!(fake.prompts.lock().await.len(), 2);
     let _ = hold.send(());
 }
 
 #[tokio::test(flavor = "current_thread", start_paused = true)]
-async fn scheduler_direct() {
+async fn daemon_direct() {
     let (d, fake, _, _) = harness("job", Duration::from_millis(10), Duration::from_secs(30));
-    let env = env(ConversationKind::Group, "1", "scheduler", "wake", None);
-    d.handle_scheduler(env).await.unwrap();
+    let env = env(ConversationKind::Group, "1", "daemon", "wake", None);
+    d.handle_daemon(env).await.unwrap();
     wait(Duration::from_millis(10)).await;
     assert_eq!(fake.prompts.lock().await.len(), 1);
     assert!(!fake.prompts.lock().await[0].idle);
+}
+
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn dream_interval_fires() {
+    let (d, fake, _, _) = harness("ok", Duration::from_millis(10), Duration::from_secs(30));
+    d.configure_dream(DreamConfig {
+        mode: "interval".into(),
+        cron: None,
+        interval_secs: 5,
+    })
+    .await;
+    d.tick_dream().await;
+    assert!(fake.prompts.lock().await.is_empty());
+    wait(Duration::from_secs(5)).await;
+    d.tick_dream().await;
+    let p = fake.prompts.lock().await;
+    assert_eq!(p.len(), 1);
+    assert!(p[0].dream);
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn dream_interval_waits_for_agent() {
+    let (d, fake, _, _) = harness("ok", Duration::from_millis(10), Duration::from_secs(30));
+    d.set_self_id("main".into(), "bot".into()).await;
+    d.configure_dream(DreamConfig {
+        mode: "interval".into(),
+        cron: None,
+        interval_secs: 5,
+    })
+    .await;
+    let hold = fake.set_hold().await;
+    d.handle(env(ConversationKind::Dm, "u1", "u1", "hi", None))
+        .await
+        .unwrap();
+    wait(Duration::from_millis(10)).await;
+    wait(Duration::from_secs(5)).await;
+    d.tick_dream().await;
+    assert_eq!(fake.prompts.lock().await.len(), 1);
+    let _ = hold.send(());
+    wait(Duration::from_millis(1)).await;
+    d.tick_dream().await;
+    let p = fake.prompts.lock().await;
+    assert_eq!(p.len(), 2);
+    assert!(p[1].dream);
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn dream_at_waits_until_idle() {
+    let (d, fake, _, _) = harness("ok", Duration::from_millis(10), Duration::from_secs(30));
+    d.set_self_id("main".into(), "bot".into()).await;
+    d.configure_dream(DreamConfig {
+        mode: "at".into(),
+        cron: None,
+        interval_secs: 3600,
+    })
+    .await;
+    let hold = fake.set_hold().await;
+    d.handle(env(ConversationKind::Dm, "u1", "u1", "hi", None))
+        .await
+        .unwrap();
+    wait(Duration::from_millis(10)).await;
+    d.set_dream_due().await;
+    d.tick_dream().await;
+    assert_eq!(fake.prompts.lock().await.len(), 1);
+    let _ = hold.send(());
+    wait(Duration::from_millis(1)).await;
+    d.tick_dream().await;
+    let p = fake.prompts.lock().await;
+    assert_eq!(p.len(), 2);
+    assert!(p[1].dream);
+}
+
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn custom_command_swallows_and_owner_level() {
+    let (d, fake, _, _) = harness("x", Duration::from_millis(10), Duration::from_secs(30));
+    d.set_self_id("main".into(), "bot".into()).await;
+    let rec = std::sync::Arc::new(RecDaemon::default());
+    d.set_daemon(rec.clone()).await;
+    d.set_registry(Registry {
+        commands: vec![
+            CommandReg {
+                name: "ping".into(),
+                level: "user".into(),
+                docs: "pong".into(),
+            },
+            CommandReg {
+                name: "op".into(),
+                level: "owner".into(),
+                docs: String::new(),
+            },
+        ],
+        handlers: vec![],
+    })
+    .await;
+
+    d.handle(env(ConversationKind::Dm, "u1", "u1", "/ping a", None))
+        .await
+        .unwrap();
+    wait(Duration::from_millis(10)).await;
+    assert!(fake.prompts.lock().await.is_empty());
+    assert_eq!(rec.runs.lock().await.len(), 1);
+    assert_eq!(rec.runs.lock().await[0].name, "ping");
+
+    d.handle(env(ConversationKind::Dm, "u1", "u1", "/op", None))
+        .await
+        .unwrap();
+    wait(Duration::from_millis(10)).await;
+    assert_eq!(rec.runs.lock().await.len(), 1);
+    assert_eq!(fake.prompts.lock().await.len(), 1);
+
+    d.handle(env(
+        ConversationKind::Group,
+        "1",
+        "u",
+        "/ping",
+        None,
+    ))
+    .await
+    .unwrap();
+    assert_eq!(rec.runs.lock().await.len(), 1);
+
+    d.handle(env(
+        ConversationKind::Group,
+        "1",
+        "u",
+        "/ping",
+        Some("bot"),
+    ))
+    .await
+        .unwrap();
+    wait(Duration::from_millis(1)).await;
+    assert_eq!(rec.runs.lock().await.len(), 2);
+
+    d.handle(env(ConversationKind::Dm, "u1", "u1", "/nope", None))
+        .await
+        .unwrap();
+    wait(Duration::from_millis(10)).await;
+    assert_eq!(fake.prompts.lock().await.len(), 2);
+}
+
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn help_lists_new_and_custom() {
+    let (d, fake, ch, _) = harness("x", Duration::from_millis(10), Duration::from_secs(30));
+    d.set_self_id("main".into(), "bot".into()).await;
+    d.set_registry(Registry {
+        commands: vec![
+            CommandReg {
+                name: "ping".into(),
+                level: "user".into(),
+                docs: "pong\nmore".into(),
+            },
+            CommandReg {
+                name: "op".into(),
+                level: "owner".into(),
+                docs: String::new(),
+            },
+        ],
+        handlers: vec![],
+    })
+    .await;
+    d.handle(env(ConversationKind::Dm, "u1", "u1", "/help", None))
+        .await
+        .unwrap();
+    assert!(fake.prompts.lock().await.is_empty());
+    let sent = ch.sent.lock().await;
+    let Part::Text { text } = &sent[0].2[0] else {
+        panic!("help text");
+    };
+    assert_eq!(
+        text,
+        "Commands:\n/help — list commands\n/new — reset session (owners)\n/ping — pong\n/op [owner]\n"
+    );
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn inbound_handler_skips_new_and_commands() {
+    let (d, fake, _, _) = harness("ok", Duration::from_millis(10), Duration::from_secs(30));
+    d.set_self_id("main".into(), "bot".into()).await;
+    let rec = std::sync::Arc::new(RecDaemon::default());
+    d.set_daemon(rec.clone()).await;
+    d.set_registry(Registry {
+        commands: vec![CommandReg {
+            name: "ping".into(),
+            level: "user".into(),
+            docs: String::new(),
+        }],
+        handlers: vec![HandlerReg {
+            name: "onmsg".into(),
+            event: "message.inbound".into(),
+            account: None,
+            kind: None,
+            peer: None,
+        }],
+    })
+    .await;
+
+    d.handle(env(ConversationKind::Dm, "u1", "u1", "hello", None))
+        .await
+        .unwrap();
+    wait(Duration::from_millis(10)).await;
+    assert_eq!(fake.prompts.lock().await.len(), 1);
+    assert_eq!(rec.runs.lock().await.len(), 1);
+    assert_eq!(rec.runs.lock().await[0].kind, "handler");
+
+    d.handle(env(ConversationKind::Dm, "u1", "u1", "/ping", None))
+        .await
+        .unwrap();
+    wait(Duration::from_millis(1)).await;
+    assert_eq!(rec.runs.lock().await.len(), 2);
+    assert_eq!(rec.runs.lock().await[1].kind, "command");
+
+    d.handle(env(ConversationKind::Dm, "owner", "owner", "/new", None))
+        .await
+        .unwrap();
+    assert_eq!(rec.runs.lock().await.len(), 2);
+    assert_eq!(fake.resets.lock().await.len(), 1);
+}
+
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn prompt_wait_returns_text() {
+    let (d, fake, _, _) = harness("done", Duration::from_millis(10), Duration::from_secs(30));
+    d.set_self_id("main".into(), "bot".into()).await;
+    let (_id, text) = d
+        .prompt_wait(env(ConversationKind::Dm, "u1", "daemon", "sum", None))
+        .await
+        .unwrap();
+    assert_eq!(text, "done");
+    assert_eq!(fake.prompts.lock().await.len(), 1);
+    assert!(!fake.prompts.lock().await[0].idle);
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn prompt_wait_after_running_fire() {
+    let (d, fake, _, _) = harness("done", Duration::from_millis(10), Duration::from_secs(30));
+    d.set_self_id("main".into(), "bot".into()).await;
+    let hold = fake.set_hold().await;
+    d.handle(env(ConversationKind::Dm, "u1", "u1", "one", None))
+        .await
+        .unwrap();
+    wait(Duration::from_millis(10)).await;
+    assert_eq!(fake.prompts.lock().await.len(), 1);
+    let d2 = d.clone();
+    let task = tokio::spawn(async move {
+        d2.prompt_wait(env(ConversationKind::Dm, "u1", "daemon", "two", None))
+            .await
+    });
+    wait(Duration::from_millis(50)).await;
+    assert_eq!(fake.prompts.lock().await.len(), 1);
+    let _ = hold.send(());
+    wait(Duration::from_millis(50)).await;
+    let (_id, text) = task.await.unwrap().unwrap();
+    assert_eq!(text, "done");
+    assert_eq!(fake.prompts.lock().await.len(), 2);
 }

@@ -12,7 +12,7 @@ RUN apt-get update \
     && command -v pi-acp \
     && rm -rf /var/lib/apt/lists/*
 COPY docker/entrypoint.sh /entrypoint.sh
-COPY docker/scheduler.toml /etc/gladys/scheduler.toml
+COPY docker/daemon.toml /etc/gladys/daemon.toml
 RUN chmod +x /entrypoint.sh
 WORKDIR /workspace
 ENV HOME=/root

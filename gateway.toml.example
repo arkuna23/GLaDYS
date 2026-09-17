@@ -8,6 +8,9 @@ memory_token_env = "GLADYS_MEMORY_TOKEN"
 idle_group_secs = 30
 debounce_ms = 1000
 owners = ["onebot:123456"]
+lang = "en"  # en | zh
+daemon_url = "http://127.0.0.1:3923"
+daemon_token_env = "GLADYS_DAEMON_TOKEN"
 
 [agent]
 kind = "acp"
@@ -31,6 +34,11 @@ url = "http://127.0.0.1:3921/mcp"
 token_env = "GLADYS_MEMORY_TOKEN"
 
 [[mcp]]
-name = "scheduler"
+name = "daemon"
 url = "http://127.0.0.1:3923/mcp"
-token_env = "GLADYS_SCHEDULER_TOKEN"
+token_env = "GLADYS_DAEMON_TOKEN"
+
+[dream]
+mode = "off"
+# cron = "0 0 4 * * *"
+# interval_secs = 3600

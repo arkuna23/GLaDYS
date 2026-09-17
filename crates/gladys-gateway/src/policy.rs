@@ -44,6 +44,47 @@ fn has_new_cmd(text: &str) -> bool {
     }
     false
 }
+pub fn parse_slash(text: &str) -> Option<(String, Vec<String>)> {
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'/' {
+            let ok = i == 0 || bytes[i - 1].is_ascii_whitespace() || bytes[i - 1] == b']';
+            if ok {
+                let rest = &text[i + 1..];
+                let name: String = rest
+                    .chars()
+                    .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '-')
+                    .collect();
+                if !name.is_empty() {
+                    let argv = rest[name.len()..]
+                        .split_whitespace()
+                        .map(str::to_string)
+                        .collect();
+                    return Some((name, argv));
+                }
+            }
+        }
+        i += 1;
+    }
+    None
+}
+
+pub fn command_invocation(dm: bool, mentioned: bool, text: &str) -> Option<(String, Vec<String>)> {
+    let parsed = parse_slash(text)?;
+    if dm {
+        if text.trim().starts_with('/') {
+            Some(parsed)
+        } else {
+            None
+        }
+    } else if mentioned {
+        Some(parsed)
+    } else {
+        None
+    }
+}
+
 pub fn is_new_command(dm: bool, mentioned: bool, owner: bool, text: &str) -> bool {
     if !owner {
         return false;

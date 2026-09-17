@@ -20,17 +20,45 @@ pub struct Config {
     pub memory_url: String,
     #[serde(default = "default_memory_token_env")]
     pub memory_token_env: String,
+    #[serde(default = "default_daemon_url")]
+    pub daemon_url: String,
+    #[serde(default = "default_daemon_token_env")]
+    pub daemon_token_env: String,
     #[serde(default = "default_idle")]
     pub idle_group_secs: u64,
     #[serde(default = "default_debounce")]
     pub debounce_ms: u64,
     #[serde(default)]
     pub owners: Vec<String>,
+    #[serde(default = "default_lang")]
+    pub lang: String,
     pub agent: AgentConfig,
     #[serde(default)]
     pub policy: PolicyConfig,
     #[serde(default)]
     pub mcp: Vec<McpConfig>,
+    #[serde(default)]
+    pub dream: DreamConfig,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct DreamConfig {
+    #[serde(default = "default_dream_mode")]
+    pub mode: String,
+    #[serde(default)]
+    pub cron: Option<String>,
+    #[serde(default = "default_dream_interval")]
+    pub interval_secs: u64,
+}
+
+impl Default for DreamConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_dream_mode(),
+            cron: None,
+            interval_secs: default_dream_interval(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -82,11 +110,26 @@ fn default_channel_token_env() -> String {
 fn default_memory_token_env() -> String {
     "GLADYS_MEMORY_TOKEN".into()
 }
+fn default_daemon_url() -> String {
+    "http://127.0.0.1:3923".into()
+}
+fn default_daemon_token_env() -> String {
+    "GLADYS_DAEMON_TOKEN".into()
+}
 fn default_idle() -> u64 {
     30
 }
 fn default_debounce() -> u64 {
     1000
+}
+fn default_dream_mode() -> String {
+    "off".into()
+}
+fn default_dream_interval() -> u64 {
+    3600
+}
+fn default_lang() -> String {
+    "en".into()
 }
 
 impl Config {
@@ -107,6 +150,9 @@ impl Config {
         env(&self.memory_token_env)
     }
 
+    pub fn daemon_token(&self) -> Result<String> {
+        env(&self.daemon_token_env)
+    }
     pub fn debounce(&self) -> Duration {
         Duration::from_millis(self.debounce_ms)
     }

@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 use gladys_gateway::acp::AcpBackend;
 use gladys_gateway::channel::ChannelWs;
 use gladys_gateway::config::{config_path_from_args, Config};
+use gladys_gateway::daemon::HttpDaemon;
 use gladys_gateway::dispatch::Dispatch;
 use gladys_gateway::http::{self, AppState};
 use gladys_gateway::io::ChannelSlot;
@@ -56,7 +57,18 @@ async fn main() -> Result<()> {
         slot.clone(),
         Arc::new(MemoryHttp::new(cfg.memory_url.clone(), cfg.memory_token()?)),
         store.clone(),
+        cfg.lang.clone(),
     );
+    dispatch
+        .set_daemon(std::sync::Arc::new(HttpDaemon::new(
+            cfg.daemon_url.clone(),
+            cfg.daemon_token()?,
+        )))
+        .await;
+    if cfg.dream.mode != "off" {
+        dispatch.configure_dream(cfg.dream.clone()).await;
+        dispatch.spawn_dream_loop();
+    }
     let jobs = gladys_gateway::Jobs::new(store, dispatch.clone());
     jobs.start();
     let ws = ChannelWs::connect(&cfg.channel_ws, &cfg.channel_token()?, dispatch.clone()).await?;

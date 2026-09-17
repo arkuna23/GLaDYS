@@ -9,8 +9,8 @@ services:
     volumes:
       - ./workspace/home:/workspace
       - ./workspace/.pi:/root/.pi
-      - ./workspace/scheduler.toml:/etc/gladys/scheduler.toml:ro
-      - ${GLADYS_SCHEDULER_BIN:-./target/release/gladys-scheduler}:/usr/local/bin/gladys-scheduler:ro
+      - ./docker/daemon.toml:/etc/gladys/daemon.toml:ro
+      - ${GLADYS_DAEMON_BIN:-./target/release/gladys-daemon}:/usr/local/bin/gladys-daemon:ro
     working_dir: /workspace
     environment:
       HOME: /root

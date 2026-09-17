@@ -21,19 +21,19 @@ source workspace/.env
 set +a
 
 if [[ "$docker" -eq 1 ]]; then
-  if [[ -x "$ROOT/bin/gladys-scheduler" ]]; then
+  if [[ -x "$ROOT/bin/gladys-daemon" ]]; then
     BIN="$ROOT/bin"
   elif [[ -f "$ROOT/Cargo.toml" ]]; then
-    cargo build --release -p gladys-scheduler
-    BIN="$ROOT/target/release"
+    CC=musl-gcc cargo build --release --target x86_64-unknown-linux-musl -p gladys-daemon
+    BIN="$ROOT/target/x86_64-unknown-linux-musl/release"
   else
-    echo "missing gladys-scheduler binary" >&2
+    echo "missing gladys-daemon binary" >&2
     exit 1
   fi
   mkdir -p workspace/run
   touch workspace/run/docker.mode
-  export GLADYS_SCHEDULER_BIN="$BIN/gladys-scheduler"
-  docker compose --env-file workspace/.env up -d --build
+  export GLADYS_DAEMON_BIN="$BIN/gladys-daemon"
+  ./scripts/compose-up.sh
   exec docker exec -it -w /workspace gladys-agent bash
 fi
 

@@ -4,7 +4,7 @@ members = [
     "crates/gladys-channel",
     "crates/gladys-memory",
     "crates/gladys-gateway",
-    "crates/gladys-scheduler",
+    "crates/gladys-daemon",
 ]
 
 [workspace.package]

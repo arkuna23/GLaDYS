@@ -34,6 +34,7 @@ fn harness() -> (Jobs, Arc<FakeBackend>, Dispatch) {
         ch,
         mem,
         store.clone(),
+        "en",
     );
     (Jobs::new(store, dispatch.clone()), fake, dispatch)
 }
@@ -72,7 +73,7 @@ async fn jobs_http_create_list_delete() {
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/v1/scheduler/jobs")
+                .uri("/v1/daemon/jobs")
                 .header("Authorization", "Bearer t")
                 .header("content-type", "application/json")
                 .body(Body::from(
@@ -99,7 +100,7 @@ async fn jobs_http_create_list_delete() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri("/v1/scheduler/jobs")
+                .uri("/v1/daemon/jobs")
                 .header("Authorization", "Bearer t")
                 .body(Body::empty())
                 .unwrap(),
@@ -114,7 +115,7 @@ async fn jobs_http_create_list_delete() {
         .oneshot(
             Request::builder()
                 .method("DELETE")
-                .uri(format!("/v1/scheduler/jobs/{id}"))
+                .uri(format!("/v1/daemon/jobs/{id}"))
                 .header("Authorization", "Bearer t")
                 .body(Body::empty())
                 .unwrap(),
@@ -153,24 +154,9 @@ async fn cron_reschedules() {
 }
 
 #[tokio::test]
-async fn stdio_line_then_delete_stops() {
-    let (jobs, fake, _) = harness();
+async fn stdio_rejected() {
+    let (jobs, _, _) = harness();
     let mut spec = spec("stdio");
     spec.command = Some("sh".into());
-    spec.args = vec!["-c".into(), "echo one; exec sleep 30".into()];
-    let job = jobs.create(spec).await.unwrap();
-    let start = std::time::Instant::now();
-    loop {
-        if fake.prompts.lock().await.len() == 1 {
-            break;
-        }
-        if start.elapsed() > Duration::from_secs(2) {
-            panic!("stdio did not fire");
-        }
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
-    jobs.cancel(&job.id).await.unwrap();
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert_eq!(fake.prompts.lock().await.len(), 1);
-    assert_eq!(fake.prompts.lock().await[0].messages[0].flatten_text(), "one");
+    assert!(jobs.create(spec).await.is_err());
 }

@@ -20,7 +20,7 @@ pub struct AcpBackend {
     cwd: Option<String>,
     mcp: Vec<McpConfig>,
     store: Store,
-    proc: Mutex<Option<AcpProc>>,
+    procs: Mutex<HashMap<String, Arc<Mutex<AcpProc>>>>,
 }
 
 struct AcpProc {
@@ -45,15 +45,11 @@ impl AcpBackend {
             cwd,
             mcp,
             store,
-            proc: Mutex::new(None),
+            procs: Mutex::new(HashMap::new()),
         }
     }
 
-    async fn ensure_proc(&self) -> Result<()> {
-        let mut slot = self.proc.lock().await;
-        if slot.is_some() {
-            return Ok(());
-        }
+    async fn spawn_one(&self) -> Result<AcpProc> {
         tracing::info!(cmd = %self.command, args = ?self.args, "spawn acp");
         let mut child = Command::new(&self.command)
             .args(&self.args)
@@ -120,10 +116,26 @@ impl AcpBackend {
         });
         tracing::info!("acp initialize");
         let _ = rpc(&mut proc, "initialize", init).await?;
-        // pi-acp has no notifications/initialized; new process invalidates old session ids
-        self.store.clear_sessions()?;
-        *slot = Some(proc);
-        Ok(())
+        Ok(proc)
+    }
+
+    async fn proc_for(&self, key: &ConvKey) -> Result<Arc<Mutex<AcpProc>>> {
+        let ck = key.as_list_key();
+        {
+            let map = self.procs.lock().await;
+            if let Some(p) = map.get(&ck) {
+                return Ok(p.clone());
+            }
+        }
+        let proc = self.spawn_one().await?;
+        let mut map = self.procs.lock().await;
+        if let Some(p) = map.get(&ck) {
+            return Ok(p.clone());
+        }
+        let _ = self.store.drop_session(&ck);
+        let arc = Arc::new(Mutex::new(proc));
+        map.insert(ck, arc.clone());
+        Ok(arc)
     }
 
     fn mcp_servers(&self) -> Value {
@@ -143,16 +155,11 @@ impl AcpBackend {
         Value::Array(list)
     }
 
-    async fn session_id(&self, key: &ConvKey) -> Result<String> {
-        self.ensure_proc().await?;
+    async fn session_id_locked(&self, proc: &mut AcpProc, key: &ConvKey) -> Result<String> {
         let ck = key.as_list_key();
         if let Some(id) = self.store.get_session(&ck)? {
             return Ok(id);
         }
-        let mut slot = self.proc.lock().await;
-        let proc = slot
-            .as_mut()
-            .ok_or_else(|| GatewayError::Agent("acp not started".into()))?;
         tracing::info!(conv = %ck, "acp session/new");
         let resp = rpc(
             proc,
@@ -180,8 +187,19 @@ impl AcpBackend {
 #[async_trait]
 impl AgentBackend for AcpBackend {
     async fn prompt(&self, key: &ConvKey, input: AgentInput) -> Result<AgentOutput> {
-        let sid = self.session_id(key).await?;
         let mut body = String::new();
+        body.push_str(&format!(
+            "Account: {}\nChat: {} {}\n",
+            input.account,
+            input.key.kind.as_str(),
+            input.key.peer
+        ));
+        if let Some(id) = &input.self_id {
+            body.push_str(&format!("Self: {id}\n"));
+        }
+        if input.dream {
+            body.push_str("Dreaming. Use memory tools to compact, dedupe, and reorganize. Do not channel_send.\n");
+        }
         if input.idle {
             body.push_str("You are checking unread chat. Reply only if useful; otherwise empty.\n");
         }
@@ -191,23 +209,20 @@ impl AgentBackend for AcpBackend {
             body.push_str(&pack);
             body.push('\n');
         }
-        body.push_str("New messages:\n");
-        for env in &input.messages {
-            body.push_str(&format!(
-                "{}: {}\n",
-                env.sender.name.as_deref().unwrap_or(&env.sender.id),
-                env.flatten_text()
-            ));
+        if !input.messages.is_empty() {
+            body.push_str("New messages:\n");
+            for env in &input.messages {
+                body.push_str(&env.prompt_line());
+                body.push('\n');
+            }
         }
-        self.ensure_proc().await?;
-        let mut slot = self.proc.lock().await;
-        let proc = slot
-            .as_mut()
-            .ok_or_else(|| GatewayError::Agent("acp not started".into()))?;
-        tracing::info!(session = %sid, "acp session/prompt");
+        let slot = self.proc_for(key).await?;
+        let mut proc = slot.lock().await;
+        let sid = self.session_id_locked(&mut proc, key).await?;
+        tracing::info!(session = %sid, conv = %key.as_list_key(), text = %body, "acp prompt");
         proc.out.lock().await.insert(sid.clone(), StreamBuf::default());
         let resp = rpc(
-            proc,
+            &mut proc,
             "session/prompt",
             json!({
                 "sessionId": sid,
@@ -237,18 +252,21 @@ impl AgentBackend for AcpBackend {
     }
 
     async fn steer(&self, key: &ConvKey, text: &str) -> Result<()> {
-        let sid = self.session_id(key).await?;
-        self.ensure_proc().await?;
-        let mut slot = self.proc.lock().await;
-        let proc = slot
-            .as_mut()
-            .ok_or_else(|| GatewayError::Agent("acp not started".into()))?;
+        let slot = self.proc_for(key).await?;
+        let mut proc = slot.lock().await;
+        let sid = self.session_id_locked(&mut proc, key).await?;
+        let body = format!(
+            "Chat: {} {}\nSteering / new messages:\n{text}",
+            key.kind.as_str(),
+            key.peer
+        );
+        tracing::info!(session = %sid, conv = %key.as_list_key(), text = %body, "acp prompt");
         let _ = rpc(
-            proc,
+            &mut proc,
             "session/prompt",
             json!({
                 "sessionId": sid,
-                "prompt": [{ "type": "text", "text": format!("Steering / new messages:\n{text}") }]
+                "prompt": [{ "type": "text", "text": body }]
             }),
         )
         .await?;

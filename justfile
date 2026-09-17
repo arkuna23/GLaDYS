@@ -20,7 +20,7 @@ start *args:
     ./scripts/start.sh {{args}}
 
 
-# Agent + scheduler in Docker.
+# Agent + daemon in Docker.
 start-docker:
     ./scripts/start.sh --docker
 

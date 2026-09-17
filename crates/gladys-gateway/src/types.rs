@@ -165,6 +165,15 @@ impl Envelope {
         flatten_parts(&self.parts)
     }
 
+    pub fn prompt_line(&self) -> String {
+        format!(
+            "{}[{}]: {}",
+            self.sender.name.as_deref().unwrap_or(""),
+            self.sender.id,
+            self.flatten_text()
+        )
+    }
+
     pub fn mentions_user(&self, user_id: &str) -> bool {
         self.parts.iter().any(|p| matches!(p, Part::Mention { target: MentionTarget::User, id: Some(id) } if id == user_id))
     }
@@ -322,7 +331,9 @@ impl Pack {
 #[derive(Debug, Clone)]
 pub struct AgentInput {
     pub idle: bool,
+    pub dream: bool,
     pub account: String,
+    pub self_id: Option<String>,
     pub key: ConvKey,
     pub messages: Vec<Envelope>,
     pub pack: Pack,

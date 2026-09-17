@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use axum::extract::{Path, State};
 use axum::routing::post;
 use axum::{Json, Router};
-use gladys_scheduler::GatewayClient;
+use gladys_daemon::GatewayClient;
 use serde_json::{json, Value};
 
 #[derive(Clone, Default)]
@@ -31,8 +31,8 @@ async fn delete(State(m): State<Mock>, Path(id): Path<String>) -> Json<Value> {
 async fn client_create_list_cancel() {
     let mock = Mock::default();
     let app = Router::new()
-        .route("/v1/scheduler/jobs", post(create).get(list))
-        .route("/v1/scheduler/jobs/{id}", axum::routing::delete(delete))
+        .route("/v1/daemon/jobs", post(create).get(list))
+        .route("/v1/daemon/jobs/{id}", axum::routing::delete(delete))
         .with_state(mock);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();

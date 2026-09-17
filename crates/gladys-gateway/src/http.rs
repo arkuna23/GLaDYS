@@ -2,11 +2,12 @@ use axum::extract::{Path, Request, State};
 use axum::http::{header, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::Response;
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::daemon::Registry;
 use crate::dispatch::Dispatch;
 use crate::error::GatewayError;
 use crate::jobs::{JobSpec, Jobs};
@@ -22,9 +23,11 @@ pub struct AppState {
 
 pub fn router(state: AppState) -> Router {
     let protected = Router::new()
-        .route("/v1/scheduler/trigger", post(scheduler_trigger))
-        .route("/v1/scheduler/jobs", post(create_job).get(list_jobs))
-        .route("/v1/scheduler/jobs/{id}", axum::routing::delete(delete_job))
+        .route("/v1/daemon/trigger", post(daemon_trigger))
+        .route("/v1/daemon/prompt", post(daemon_prompt))
+        .route("/v1/daemon/jobs", post(create_job).get(list_jobs))
+        .route("/v1/daemon/jobs/{id}", axum::routing::delete(delete_job))
+        .route("/v1/daemon/registry", put(put_registry))
         .layer(middleware::from_fn_with_state(
             state.clone(),
             auth_middleware,
@@ -67,19 +70,16 @@ struct TriggerBody {
     payload: Option<Value>,
 }
 
-async fn scheduler_trigger(
-    State(state): State<AppState>,
-    Json(body): Json<TriggerBody>,
-) -> Result<Json<Value>, StatusCode> {
-    let env = Envelope {
+fn daemon_env(body: TriggerBody) -> Envelope {
+    Envelope {
         id: String::new(),
         channel: body.channel,
         account: body.account,
         conversation: body.conversation,
         direction: "in".into(),
         sender: Actor {
-            id: "scheduler".into(),
-            name: Some("scheduler".into()),
+            id: "daemon".into(),
+            name: Some("daemon".into()),
         },
         parts: vec![Part::Text {
             text: body.text.unwrap_or_else(|| {
@@ -90,9 +90,25 @@ async fn scheduler_trigger(
             }),
         }],
         reply_to: None,
-    };
-    match state.dispatch.handle_scheduler(env).await {
+    }
+}
+
+async fn daemon_trigger(
+    State(state): State<AppState>,
+    Json(body): Json<TriggerBody>,
+) -> Result<Json<Value>, StatusCode> {
+    match state.dispatch.handle_daemon(daemon_env(body)).await {
         Ok(id) => Ok(Json(serde_json::json!({"ok": true, "id": id}))),
+        Err(_) => Err(StatusCode::BAD_REQUEST),
+    }
+}
+
+async fn daemon_prompt(
+    State(state): State<AppState>,
+    Json(body): Json<TriggerBody>,
+) -> Result<Json<Value>, StatusCode> {
+    match state.dispatch.prompt_wait(daemon_env(body)).await {
+        Ok((id, text)) => Ok(Json(serde_json::json!({"ok": true, "id": id, "text": text}))),
         Err(_) => Err(StatusCode::BAD_REQUEST),
     }
 }
@@ -118,6 +134,15 @@ async fn delete_job(
         Ok(false) => Err(StatusCode::NOT_FOUND),
         Err(e) => Err(job_err(e)),
     }
+}
+
+
+async fn put_registry(
+    State(state): State<AppState>,
+    Json(reg): Json<Registry>,
+) -> Json<Value> {
+    state.dispatch.set_registry(reg).await;
+    Json(serde_json::json!({"ok": true}))
 }
 
 fn job_err(e: GatewayError) -> StatusCode {

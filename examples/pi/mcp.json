@@ -15,10 +15,10 @@
       "directTools": true,
       "lifecycle": "eager"
     },
-    "scheduler": {
+    "daemon": {
       "type": "http",
       "url": "http://127.0.0.1:3923/mcp",
-      "headers": { "Authorization": "Bearer ${GLADYS_SCHEDULER_TOKEN}" },
+      "headers": { "Authorization": "Bearer ${GLADYS_DAEMON_TOKEN}" },
       "directTools": true,
       "lifecycle": "eager"
     }

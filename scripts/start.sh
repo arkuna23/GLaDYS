@@ -23,8 +23,9 @@ set +a
 if [[ -x "$ROOT/bin/gladys-channel" ]]; then
   BIN="$ROOT/bin"
 elif [[ -f "$ROOT/Cargo.toml" ]]; then
-  cargo build --release -p gladys-channel -p gladys-memory -p gladys-gateway -p gladys-scheduler
-  BIN="$ROOT/target/release"
+  CC=musl-gcc cargo build --release --target x86_64-unknown-linux-musl \
+    -p gladys-channel -p gladys-memory -p gladys-gateway -p gladys-daemon
+  BIN="$ROOT/target/x86_64-unknown-linux-musl/release"
 else
   echo "missing binaries (bin/) and no Cargo.toml to build" >&2
   exit 1
@@ -34,9 +35,9 @@ mkdir -p workspace/run
 export GLADYS_AGENT_COMMAND="$ROOT/scripts/acp.sh"
 
 wait_port() {
-  local port=$1 pidfile=$2
+  local port=$1 pidfile=${2:-}
   for _ in $(seq 1 50); do
-    if ! kill -0 "$(cat "$pidfile")" 2>/dev/null; then
+    if [[ -n "$pidfile" ]] && ! kill -0 "$(cat "$pidfile")" 2>/dev/null; then
       echo "process for :$port exited" >&2
       exit 1
     fi
@@ -51,9 +52,10 @@ wait_port() {
 
 if [[ "$docker" -eq 1 ]]; then
   touch workspace/run/docker.mode
-  export GLADYS_SCHEDULER_BIN="$BIN/gladys-scheduler"
+  export GLADYS_DAEMON_BIN="$BIN/gladys-daemon"
   export GLADYS_ACP_CWD=/workspace
-  docker compose --env-file workspace/.env up -d --build
+  ./scripts/compose-up.sh
+  wait_port 3923
 else
   rm -f workspace/run/docker.mode
   if ! command -v pi-acp >/dev/null 2>&1; then
@@ -72,11 +74,10 @@ wait_port 3921 workspace/run/memory.pid
 wait_port 3922 workspace/run/gateway.pid
 
 if [[ "$docker" -eq 0 ]]; then
-  "$BIN/gladys-scheduler" --config workspace/scheduler.toml & echo $! > workspace/run/scheduler.pid
-  wait_port 3923 workspace/run/scheduler.pid
-  echo "channel/memory/gateway/scheduler up. Ctrl+C stops host."
+  "$BIN/gladys-daemon" --config workspace/daemon.toml & echo $! > workspace/run/daemon.pid
+  wait_port 3923 workspace/run/daemon.pid
+  echo "channel/memory/gateway/daemon up. Ctrl+C stops host."
 else
-  echo "channel/memory/gateway up. agent+scheduler in docker. Ctrl+C stops host (docker stays)."
+  echo "channel/memory/gateway up. agent+daemon in docker. Ctrl+C stops host (docker stays)."
 fi
-
 wait

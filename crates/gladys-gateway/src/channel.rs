@@ -67,25 +67,24 @@ impl ChannelWs {
                             }
                         }
                     }
-                    Some("event")
-                        if v.get("event").and_then(Value::as_str) == Some("message.inbound") =>
-                    {
-                        if let Some(payload) = v.get("payload")
-                            && let Some(env) = envelope_from_event(payload)
-                            && let Err(e) = dispatch_c.handle(env).await
-                        {
-                            tracing::warn!("inbound: {e}");
-                        }
-                    }
-                    Some("event")
-                        if v.get("event").and_then(Value::as_str) == Some("connection") =>
-                    {
-                        if let Some(p) = v.get("payload") {
-                            let account = p.get("account").and_then(Value::as_str);
-                            let self_id = p.get("self_id").and_then(Value::as_str);
-                            if let (Some(acc), Some(sid)) = (account, self_id) {
-                                dispatch_c.set_self_id(acc.into(), sid.into()).await;
+                    Some("event") => {
+                        let name = v.get("event").and_then(Value::as_str).unwrap_or("");
+                        let payload = v.get("payload").cloned().unwrap_or(Value::Null);
+                        if name == "message.inbound" {
+                            if let Some(env) = envelope_from_event(&payload)
+                                && let Err(e) = dispatch_c.handle(env).await
+                            {
+                                tracing::warn!("inbound: {e}");
                             }
+                        } else {
+                            if name == "connection" {
+                                let account = payload.get("account").and_then(Value::as_str);
+                                let self_id = payload.get("self_id").and_then(Value::as_str);
+                                if let (Some(acc), Some(sid)) = (account, self_id) {
+                                    dispatch_c.set_self_id(acc.into(), sid.into()).await;
+                                }
+                            }
+                            dispatch_c.handle_bus_event(name, payload).await;
                         }
                     }
                     Some("res") => {

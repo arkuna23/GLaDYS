@@ -11,6 +11,7 @@
 /memory.toml
 /gateway.toml
 /scheduler.toml
+/daemon.toml
 workspace/.pi/*
 !workspace/.pi/.gitkeep
 workspace/home/*
