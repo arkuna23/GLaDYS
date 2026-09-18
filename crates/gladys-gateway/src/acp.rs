@@ -209,6 +209,12 @@ impl AgentBackend for AcpBackend {
             body.push_str(&pack);
             body.push('\n');
         }
+        let delta = input.pack_delta.render();
+        if !delta.is_empty() {
+            body.push_str("Memory updates:\n");
+            body.push_str(&delta);
+            body.push('\n');
+        }
         if !input.messages.is_empty() {
             body.push_str("New messages:\n");
             for env in &input.messages {

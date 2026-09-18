@@ -326,6 +326,67 @@ impl Pack {
         }
         s
     }
+
+    pub fn global_delta(prev: &Pack, next: &Pack) -> PackDelta {
+        use std::collections::HashMap;
+        let old: HashMap<&str, &MemoryItem> =
+            prev.global.iter().map(|m| (m.id.as_str(), m)).collect();
+        let new: HashMap<&str, &MemoryItem> =
+            next.global.iter().map(|m| (m.id.as_str(), m)).collect();
+        let mut delta = PackDelta::default();
+        for (id, item) in &new {
+            match old.get(id) {
+                None => delta.added.push((*item).clone()),
+                Some(prev_item) if prev_item.text != item.text => {
+                    delta
+                        .changed
+                        .push(((*prev_item).clone(), (*item).clone()));
+                }
+                Some(_) => {}
+            }
+        }
+        for (id, item) in &old {
+            if !new.contains_key(id) {
+                delta.removed.push((*item).clone());
+            }
+        }
+        delta
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct PackDelta {
+    pub added: Vec<MemoryItem>,
+    pub changed: Vec<(MemoryItem, MemoryItem)>,
+    pub removed: Vec<MemoryItem>,
+}
+
+impl PackDelta {
+    pub fn is_empty(&self) -> bool {
+        self.added.is_empty() && self.changed.is_empty() && self.removed.is_empty()
+    }
+
+    pub fn render(&self) -> String {
+        let mut s = String::new();
+        for it in &self.added {
+            s.push_str("+ global: ");
+            s.push_str(&it.text);
+            s.push('\n');
+        }
+        for (old, new) in &self.changed {
+            s.push_str("~ global: ");
+            s.push_str(&old.text);
+            s.push_str(" => ");
+            s.push_str(&new.text);
+            s.push('\n');
+        }
+        for it in &self.removed {
+            s.push_str("- global: ");
+            s.push_str(&it.text);
+            s.push('\n');
+        }
+        s
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -337,8 +398,8 @@ pub struct AgentInput {
     pub key: ConvKey,
     pub messages: Vec<Envelope>,
     pub pack: Pack,
+    pub pack_delta: PackDelta,
 }
-
 #[derive(Debug, Clone, Default)]
 pub struct AgentOutput {
     pub text: String,

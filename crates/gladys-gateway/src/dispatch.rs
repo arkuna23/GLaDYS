@@ -14,7 +14,7 @@ use crate::error::Result;
 use crate::io::{ChannelIo, MemoryIo};
 use crate::policy::{command_invocation, is_new_command, Policy};
 use crate::store::Store;
-use crate::types::{AgentInput, Conversation, ConversationKind, ConvKey, Envelope, Part};
+use crate::types::{AgentInput, Conversation, ConversationKind, ConvKey, Envelope, Pack, PackDelta, Part};
 use crate::daemon::{payload_from_env, run_json, Registry, SharedDaemon};
 
 #[derive(Clone)]
@@ -46,10 +46,21 @@ struct ConvState {
     pending: Vec<Envelope>,
     steer: Vec<Envelope>,
     hot_until: Option<Instant>,
+    mem_snapshot: Option<crate::types::Pack>,
 }
 
-
 impl ConvState {
+    fn new() -> Self {
+        Self {
+            epoch: 0,
+            running: false,
+            pending: Vec::new(),
+            steer: Vec::new(),
+            hot_until: None,
+            mem_snapshot: None,
+        }
+    }
+
     fn hot(&self) -> bool {
         self.hot_until.map(|t| Instant::now() < t).unwrap_or(false)
     }
@@ -364,13 +375,7 @@ async fn handle(inner: Arc<Inner>, env: Envelope) -> Result<()> {
 async fn enqueue(inner: Arc<Inner>, env: Envelope, direct: bool) -> Result<()> {
     let key = env.key();
     let mut convs = inner.convs.lock().await;
-    let st = convs.entry(key.clone()).or_insert_with(|| ConvState {
-        epoch: 0,
-        running: false,
-        pending: Vec::new(),
-        steer: Vec::new(),
-        hot_until: None,
-    });
+    let st = convs.entry(key.clone()).or_insert_with(ConvState::new);
     if st.running {
         st.steer.push(env);
         return Ok(());
@@ -417,10 +422,12 @@ async fn fire(inner: &Inner, key: &ConvKey, epoch: u64, idle: bool) -> Result<()
         let batch = std::mem::take(&mut st.pending);
         (account, batch)
     };
+    let person = pack_person(key, &batch);
     if let Err(e) = run_prompt(inner, key, &account, batch, idle).await {
         tracing::warn!("agent: {e}");
     }
     drain_steer(inner, key).await;
+    refresh_mem_snapshot(inner, key, person.as_deref()).await;
     Ok(())
 }
 
@@ -430,13 +437,7 @@ async fn prompt_wait_run(inner: Arc<Inner>, env: Envelope) -> Result<String> {
     loop {
         {
             let mut convs = inner.convs.lock().await;
-            let st = convs.entry(key.clone()).or_insert_with(|| ConvState {
-                epoch: 0,
-                running: false,
-                pending: Vec::new(),
-                steer: Vec::new(),
-                hot_until: None,
-            });
+            let st = convs.entry(key.clone()).or_insert_with(ConvState::new);
             if !st.running && st.pending.is_empty() {
                 st.running = true;
                 break;
@@ -444,8 +445,10 @@ async fn prompt_wait_run(inner: Arc<Inner>, env: Envelope) -> Result<String> {
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
     }
+    let person = pack_person(&key, std::slice::from_ref(&env));
     let result = run_prompt(&inner, &key, &account, vec![env], false).await;
     drain_steer(&inner, &key).await;
+    refresh_mem_snapshot(&inner, &key, person.as_deref()).await;
     result
 }
 
@@ -457,7 +460,11 @@ async fn run_prompt(
     idle: bool,
 ) -> Result<String> {
     tracing::info!(conv = %key.as_list_key(), idle, n = batch.len(), "agent prompt");
-    let pack = fetch_pack(inner, key, &batch).await.unwrap_or_default();
+    let person = pack_person(key, &batch);
+    let pack = fetch_pack(inner, key, person.as_deref())
+        .await
+        .unwrap_or_default();
+    let (inject, pack_delta) = inject_memory(inner, key, pack).await;
     let self_id = inner.self_ids.lock().await.get(account).cloned();
     let input = AgentInput {
         idle,
@@ -466,9 +473,37 @@ async fn run_prompt(
         self_id,
         key: key.clone(),
         messages: batch,
-        pack,
+        pack: inject,
+        pack_delta,
     };
     inner.backend.prompt(key, input).await.map(|out| out.text)
+}
+
+fn pack_person(key: &ConvKey, batch: &[Envelope]) -> Option<String> {
+    match key.kind {
+        ConversationKind::Dm => batch
+            .first()
+            .map(|e| e.sender.id.clone())
+            .or_else(|| Some(key.peer.clone())),
+        ConversationKind::Group => None,
+    }
+}
+
+async fn inject_memory(inner: &Inner, key: &ConvKey, pack: Pack) -> (Pack, PackDelta) {
+    let mut convs = inner.convs.lock().await;
+    let st = convs.entry(key.clone()).or_insert_with(ConvState::new);
+    match &st.mem_snapshot {
+        None => (pack, PackDelta::default()),
+        Some(prev) => (Pack::default(), Pack::global_delta(prev, &pack)),
+    }
+}
+
+async fn refresh_mem_snapshot(inner: &Inner, key: &ConvKey, person: Option<&str>) {
+    let pack = fetch_pack(inner, key, person).await.unwrap_or_default();
+    let mut convs = inner.convs.lock().await;
+    if let Some(st) = convs.get_mut(key) {
+        st.mem_snapshot = Some(pack);
+    }
 }
 
 async fn drain_steer(inner: &Inner, key: &ConvKey) {
@@ -510,7 +545,7 @@ async fn flush_steer_batch(inner: &Inner, key: &ConvKey, batch: Vec<Envelope>) -
     inner.backend.steer(key, &text).await
 }
 
-async fn fetch_pack(inner: &Inner, key: &ConvKey, batch: &[Envelope]) -> Result<crate::types::Pack> {
+async fn fetch_pack(inner: &Inner, key: &ConvKey, person: Option<&str>) -> Result<Pack> {
     match key.kind {
         ConversationKind::Group => {
             inner
@@ -519,7 +554,6 @@ async fn fetch_pack(inner: &Inner, key: &ConvKey, batch: &[Envelope]) -> Result<
                 .await
         }
         ConversationKind::Dm => {
-            let person = batch.first().map(|e| e.sender.id.as_str());
             inner
                 .memory
                 .pack(&key.channel, key.kind, &key.peer, person)
@@ -618,6 +652,7 @@ async fn run_dream(inner: &Inner) {
         key: key.clone(),
         messages: Vec::new(),
         pack,
+        pack_delta: Default::default(),
     };
     if let Err(e) = inner.backend.prompt(&key, input).await {
         tracing::warn!("dream: {e}");

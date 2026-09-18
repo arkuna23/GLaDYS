@@ -9,7 +9,8 @@ use gladys_gateway::io::{RecChannel, RecMemory};
 use gladys_gateway::policy::Policy;
 use gladys_gateway::store::Store;
 use gladys_gateway::types::{
-    Actor, Conversation, ConversationKind, Envelope, ListMode, MentionTarget, Part, ReplyTo,
+    Actor, Conversation, ConversationKind, Envelope, ListMode, MentionTarget, MemoryItem, Pack,
+    Part, ReplyTo,
 };
 
 fn harness(
@@ -154,6 +155,83 @@ async fn dm_direct_uses_person_pack() {
     assert_eq!(mem.calls.lock().await[0].3.as_deref(), Some("u1"));
 }
 
+fn mem_item(id: &str, text: &str) -> MemoryItem {
+    MemoryItem {
+        id: id.into(),
+        text: text.into(),
+        ts: 1,
+    }
+}
+
+async fn at_bot(d: &Dispatch, text: &str) {
+    d.handle(env(
+        ConversationKind::Group,
+        "1",
+        "u",
+        text,
+        Some("bot"),
+    ))
+    .await
+    .unwrap();
+    wait(Duration::from_millis(10)).await;
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn memory_full_once_then_global_delta() {
+    let (d, fake, _, mem) = harness("ok", Duration::from_millis(10), Duration::from_secs(30));
+    d.set_self_id("main".into(), "bot".into()).await;
+    *mem.pack.lock().await = Pack {
+        global: vec![mem_item("g1", "be brief")],
+        conversation: vec![mem_item("c1", "group rule")],
+        person: vec![],
+    };
+    at_bot(&d, "hey").await;
+    {
+        let p = &fake.prompts.lock().await[0];
+        assert_eq!(p.pack.conversation.len(), 1);
+        assert_eq!(p.pack.global.len(), 1);
+        assert!(p.pack_delta.is_empty());
+    }
+    at_bot(&d, "again").await;
+    {
+        let p = &fake.prompts.lock().await[1];
+        assert!(p.pack.conversation.is_empty());
+        assert!(p.pack.global.is_empty());
+        assert!(p.pack_delta.is_empty());
+    }
+    mem.pack.lock().await.global[0].text = "be shorter".into();
+    at_bot(&d, "third").await;
+    let p = &fake.prompts.lock().await[2];
+    assert!(p.pack.conversation.is_empty());
+    assert_eq!(p.pack_delta.changed.len(), 1);
+    assert_eq!(p.pack_delta.changed[0].1.text, "be shorter");
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn memory_full_again_after_new() {
+    let (d, fake, _, mem) = harness("ok", Duration::from_millis(10), Duration::from_secs(30));
+    d.set_self_id("main".into(), "bot".into()).await;
+    *mem.pack.lock().await = Pack {
+        global: vec![mem_item("g1", "be brief")],
+        conversation: vec![mem_item("c1", "group rule")],
+        person: vec![],
+    };
+    at_bot(&d, "hey").await;
+    d.handle(env(
+        ConversationKind::Group,
+        "1",
+        "owner",
+        "/new",
+        Some("bot"),
+    ))
+    .await
+    .unwrap();
+    at_bot(&d, "after new").await;
+    let p = fake.prompts.lock().await;
+    assert_eq!(p.len(), 2);
+    assert_eq!(p[1].pack.conversation.len(), 1);
+    assert!(p[1].pack_delta.is_empty());
+}
 #[tokio::test(flavor = "current_thread", start_paused = true)]
 async fn new_command_owner_only() {
     let (d, fake, ch, _) = harness("x", Duration::from_millis(10), Duration::from_secs(30));
