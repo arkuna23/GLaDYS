@@ -30,6 +30,7 @@ fn harness() -> (Jobs, Arc<FakeBackend>, Dispatch) {
         },
         Duration::from_millis(10),
         Duration::from_secs(30),
+        Duration::ZERO,
         fake.clone(),
         ch,
         mem,

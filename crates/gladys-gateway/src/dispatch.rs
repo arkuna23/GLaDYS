@@ -26,6 +26,7 @@ pub(crate) struct Inner {
     policy: Policy,
     debounce: Duration,
     idle: Duration,
+    after: Duration,
     backend: Arc<dyn AgentBackend>,
     channel: Arc<dyn ChannelIo>,
     memory: Arc<dyn MemoryIo>,
@@ -44,6 +45,14 @@ struct ConvState {
     running: bool,
     pending: Vec<Envelope>,
     steer: Vec<Envelope>,
+    hot_until: Option<Instant>,
+}
+
+
+impl ConvState {
+    fn hot(&self) -> bool {
+        self.hot_until.map(|t| Instant::now() < t).unwrap_or(false)
+    }
 }
 
 struct DreamRuntime {
@@ -68,6 +77,7 @@ impl Dispatch {
         policy: Policy,
         debounce: Duration,
         idle: Duration,
+        after: Duration,
         backend: Arc<dyn AgentBackend>,
         channel: Arc<dyn ChannelIo>,
         memory: Arc<dyn MemoryIo>,
@@ -79,6 +89,7 @@ impl Dispatch {
                 policy,
                 debounce,
                 idle,
+                after,
                 backend,
                 channel,
                 memory,
@@ -358,11 +369,13 @@ async fn enqueue(inner: Arc<Inner>, env: Envelope, direct: bool) -> Result<()> {
         running: false,
         pending: Vec::new(),
         steer: Vec::new(),
+        hot_until: None,
     });
     if st.running {
         st.steer.push(env);
         return Ok(());
     }
+    let direct = direct || st.hot();
     let first_idle = !direct && st.pending.is_empty();
     st.pending.push(env);
     if direct {
@@ -422,6 +435,7 @@ async fn prompt_wait_run(inner: Arc<Inner>, env: Envelope) -> Result<String> {
                 running: false,
                 pending: Vec::new(),
                 steer: Vec::new(),
+                hot_until: None,
             });
             if !st.running && st.pending.is_empty() {
                 st.running = true;
@@ -467,6 +481,11 @@ async fn drain_steer(inner: &Inner, key: &ConvKey) {
             let extra = std::mem::take(&mut st.steer);
             if extra.is_empty() {
                 st.running = false;
+                st.hot_until = if inner.after.is_zero() {
+                    None
+                } else {
+                    Some(Instant::now() + inner.after)
+                };
                 None
             } else {
                 Some(extra)

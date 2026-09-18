@@ -31,6 +31,7 @@ fn harness(
         policy,
         debounce,
         idle,
+        Duration::ZERO,
         fake.clone(),
         ch.clone(),
         mem.clone(),
@@ -215,6 +216,96 @@ async fn steer_while_running() {
     assert_eq!(fake.steers.lock().await.len(), 1);
     assert!(fake.steers.lock().await[0].1.contains("two"));
     assert!(fake.steers.lock().await[0].1.contains("three"));
+}
+
+
+fn harness_after(
+    reply: &str,
+    debounce: Duration,
+    idle: Duration,
+    after: Duration,
+) -> (Dispatch, Arc<FakeBackend>, Arc<RecChannel>, Arc<RecMemory>) {
+    let fake = Arc::new(FakeBackend::new(reply));
+    let ch = Arc::new(RecChannel::default());
+    let mem = Arc::new(RecMemory::default());
+    let policy = Policy {
+        group_mode: ListMode::Whitelist,
+        dm_mode: ListMode::Blacklist,
+        groups: vec!["onebot:group:1".into()],
+        dms: vec!["onebot:dm:blocked".into()],
+        owners: vec!["onebot:owner".into()],
+    };
+    let d = Dispatch::new(
+        policy,
+        debounce,
+        idle,
+        after,
+        fake.clone(),
+        ch.clone(),
+        mem.clone(),
+        Store::memory().unwrap(),
+        "en",
+    );
+    (d, fake, ch, mem)
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn after_run_hot_window_uses_debounce() {
+    let (d, fake, _, _) = harness_after(
+        "ok",
+        Duration::from_millis(10),
+        Duration::from_secs(30),
+        Duration::from_secs(10),
+    );
+    d.set_self_id("main".into(), "bot".into()).await;
+    d.handle(env(
+        ConversationKind::Group,
+        "1",
+        "u",
+        "hey",
+        Some("bot"),
+    ))
+    .await
+    .unwrap();
+    wait(Duration::from_millis(10)).await;
+    assert_eq!(fake.prompts.lock().await.len(), 1);
+    d.handle(env(ConversationKind::Group, "1", "u", "noise", None))
+        .await
+        .unwrap();
+    wait(Duration::from_millis(10)).await;
+    assert_eq!(fake.prompts.lock().await.len(), 2);
+    assert!(!fake.prompts.lock().await[1].idle);
+}
+
+#[tokio::test(flavor = "current_thread", start_paused = true)]
+async fn after_run_hot_window_expires_to_idle() {
+    let (d, fake, _, _) = harness_after(
+        "ok",
+        Duration::from_millis(10),
+        Duration::from_secs(30),
+        Duration::from_secs(10),
+    );
+    d.set_self_id("main".into(), "bot".into()).await;
+    d.handle(env(
+        ConversationKind::Group,
+        "1",
+        "u",
+        "hey",
+        Some("bot"),
+    ))
+    .await
+    .unwrap();
+    wait(Duration::from_millis(10)).await;
+    assert_eq!(fake.prompts.lock().await.len(), 1);
+    wait(Duration::from_secs(10)).await;
+    d.handle(env(ConversationKind::Group, "1", "u", "noise", None))
+        .await
+        .unwrap();
+    wait(Duration::from_millis(10)).await;
+    assert_eq!(fake.prompts.lock().await.len(), 1);
+    wait(Duration::from_secs(30)).await;
+    assert_eq!(fake.prompts.lock().await.len(), 2);
+    assert!(fake.prompts.lock().await[1].idle);
 }
 
 

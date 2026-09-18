@@ -28,6 +28,8 @@ pub struct Config {
     pub idle_group_secs: u64,
     #[serde(default = "default_debounce")]
     pub debounce_ms: u64,
+    #[serde(default = "default_after")]
+    pub after_secs: u64,
     #[serde(default)]
     pub owners: Vec<String>,
     #[serde(default = "default_lang")]
@@ -122,6 +124,9 @@ fn default_idle() -> u64 {
 fn default_debounce() -> u64 {
     1000
 }
+fn default_after() -> u64 {
+    10
+}
 fn default_dream_mode() -> String {
     "off".into()
 }
@@ -159,6 +164,10 @@ impl Config {
 
     pub fn idle(&self) -> Duration {
         Duration::from_secs(self.idle_group_secs)
+    }
+
+    pub fn after(&self) -> Duration {
+        Duration::from_secs(self.after_secs)
     }
 
     pub fn group_mode(&self) -> ListMode {

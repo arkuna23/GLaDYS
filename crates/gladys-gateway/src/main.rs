@@ -47,6 +47,7 @@ async fn main() -> Result<()> {
         },
         cfg.debounce(),
         cfg.idle(),
+        cfg.after(),
         Arc::new(AcpBackend::new(
             agent_cmd,
             agent_args,
