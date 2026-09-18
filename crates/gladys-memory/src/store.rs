@@ -104,6 +104,118 @@ impl Store {
         Ok(n > 0)
     }
 
+    pub fn update_text(&self, id: &str, text: &str) -> Result<Memory> {
+        let conn = self.lock()?;
+        let n = conn.execute(
+            "UPDATE memories SET text = ?1 WHERE id = ?2",
+            params![text, id],
+        )?;
+        if n == 0 {
+            return Err(MemoryError::NotFound);
+        }
+        conn.execute("DELETE FROM memories_fts WHERE id = ?1", params![id])?;
+        conn.execute(
+            "INSERT INTO memories_fts (id, text) VALUES (?1, ?2)",
+            params![id, text],
+        )?;
+        drop(conn);
+        self.get(id)?.ok_or(MemoryError::NotFound)
+    }
+
+    pub fn list(
+        &self,
+        layer: Option<Layer>,
+        channel: Option<&str>,
+        conv: Option<&Conversation>,
+        person: Option<&str>,
+        before_ts: Option<i64>,
+        limit: u32,
+    ) -> Result<Vec<Memory>> {
+        let conn = self.lock()?;
+        let limit = limit.clamp(1, 200) as i64;
+        let layer_s = layer.map(|l| l.as_str());
+        let kind = conv.map(|c| c.kind.as_str());
+        let peer = conv.map(|c| c.peer.as_str());
+        let mut stmt = conn.prepare(
+            "SELECT id, layer, channel, conv_kind, conv_peer, person, text, ts
+             FROM memories
+             WHERE (?1 IS NULL OR layer = ?1)
+               AND (?2 IS NULL OR channel = ?2)
+               AND (?3 IS NULL OR conv_kind = ?3)
+               AND (?4 IS NULL OR conv_peer = ?4)
+               AND (?5 IS NULL OR person = ?5)
+               AND (?6 IS NULL OR ts < ?6)
+             ORDER BY ts DESC LIMIT ?7",
+        )?;
+        let mapped = stmt.query_map(
+            params![layer_s, channel, kind, peer, person, before_ts, limit],
+            row_to_memory,
+        )?;
+        Ok(mapped.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn scopes(&self) -> Result<crate::types::Scopes> {
+        let conn = self.lock()?;
+        let mut channels = Vec::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT DISTINCT channel FROM memories
+                 WHERE channel IS NOT NULL AND channel != ''
+                 ORDER BY channel",
+            )?;
+            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+            for r in rows {
+                channels.push(r?);
+            }
+        }
+        let mut conversations = Vec::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT DISTINCT channel, conv_kind, conv_peer FROM memories
+                 WHERE layer = 'conversation'
+                   AND channel IS NOT NULL AND conv_kind IS NOT NULL AND conv_peer IS NOT NULL
+                 ORDER BY channel, conv_kind, conv_peer",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                let channel: String = row.get(0)?;
+                let kind_s: String = row.get(1)?;
+                let peer: String = row.get(2)?;
+                let kind = ConversationKind::parse(&kind_s).unwrap_or(ConversationKind::Group);
+                Ok(crate::types::ConversationRef {
+                    channel,
+                    kind,
+                    peer,
+                })
+            })?;
+            for r in rows {
+                conversations.push(r?);
+            }
+        }
+        let mut persons = Vec::new();
+        {
+            let mut stmt = conn.prepare(
+                "SELECT DISTINCT channel, person FROM memories
+                 WHERE layer = 'person'
+                   AND channel IS NOT NULL AND person IS NOT NULL AND person != ''
+                 ORDER BY channel, person",
+            )?;
+            let rows = stmt.query_map([], |row| {
+                Ok(crate::types::PersonRef {
+                    channel: row.get(0)?,
+                    person: row.get(1)?,
+                })
+            })?;
+            for r in rows {
+                persons.push(r?);
+            }
+        }
+        Ok(crate::types::Scopes {
+            channels,
+            conversations,
+            persons,
+        })
+    }
+
     pub fn list_layer(
         &self,
         layer: Layer,

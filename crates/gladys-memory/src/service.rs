@@ -3,7 +3,7 @@ use serde::Deserialize;
 use crate::config::Config;
 use crate::error::{MemoryError, Result};
 use crate::store::Store;
-use crate::types::{Conversation, Layer, Memory, Pack};
+use crate::types::{Conversation, Layer, Memory, Pack, Scopes};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct WriteParams {
@@ -54,6 +54,30 @@ pub struct PackParams {
     pub conversation: Option<Conversation>,
     #[serde(default)]
     pub person: Option<String>,
+}
+
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ListParams {
+    #[serde(default)]
+    pub layer: Option<Layer>,
+    #[serde(default)]
+    pub channel: Option<String>,
+    #[serde(default)]
+    pub conversation: Option<Conversation>,
+    #[serde(default)]
+    pub person: Option<String>,
+    #[serde(default)]
+    pub query: Option<String>,
+    #[serde(default = "default_limit")]
+    pub limit: u32,
+    #[serde(default)]
+    pub before_ts: Option<i64>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct PatchParams {
+    pub text: String,
 }
 
 #[derive(Clone)]
@@ -132,6 +156,48 @@ impl Service {
         }
     }
 
+    pub fn list(&self, params: ListParams) -> Result<Vec<Memory>> {
+        let q = params
+            .query
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        if let Some(query) = q {
+            let mut rows = self.store.search(
+                query,
+                params.layer,
+                params.channel.as_deref(),
+                params.conversation.as_ref(),
+                params.person.as_deref(),
+                params.limit,
+            )?;
+            if let Some(ts) = params.before_ts {
+                rows.retain(|m| m.ts < ts);
+            }
+            Ok(rows)
+        } else {
+            self.store.list(
+                params.layer,
+                params.channel.as_deref(),
+                params.conversation.as_ref(),
+                params.person.as_deref(),
+                params.before_ts,
+                params.limit,
+            )
+        }
+    }
+
+    pub fn update_text(&self, id: &str, params: PatchParams) -> Result<Memory> {
+        let text = params.text.trim();
+        if text.is_empty() {
+            return Err(MemoryError::Invalid("text required".into()));
+        }
+        self.store.update_text(id, text)
+    }
+
+    pub fn scopes(&self) -> Result<Scopes> {
+        self.store.scopes()
+    }
     pub fn search(&self, params: SearchParams) -> Result<Vec<Memory>> {
         if params.query.trim().is_empty() {
             return Err(MemoryError::Invalid("query required".into()));

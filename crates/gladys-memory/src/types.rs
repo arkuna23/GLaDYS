@@ -84,3 +84,24 @@ pub struct Pack {
     pub conversation: Vec<Memory>,
     pub person: Vec<Memory>,
 }
+
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConversationRef {
+    pub channel: String,
+    pub kind: ConversationKind,
+    pub peer: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PersonRef {
+    pub channel: String,
+    pub person: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Scopes {
+    pub channels: Vec<String>,
+    pub conversations: Vec<ConversationRef>,
+    pub persons: Vec<PersonRef>,
+}

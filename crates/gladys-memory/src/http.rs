@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::extract::{Query, Request, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::{header, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::Response;
@@ -11,9 +11,10 @@ use rmcp::transport::streamable_http_server::tower::StreamableHttpService;
 use rmcp::transport::StreamableHttpServerConfig;
 use serde::Deserialize;
 
+use crate::error::MemoryError;
 use crate::mcp::MemoryMcp;
-use crate::service::{PackParams, Service};
-use crate::types::{Conversation, ConversationKind};
+use crate::service::{ListParams, PackParams, PatchParams, Service, WriteParams};
+use crate::types::{Conversation, ConversationKind, Layer, Memory};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -28,13 +29,22 @@ pub fn router(state: AppState) -> Router {
         LocalSessionManager::default().into(),
         StreamableHttpServerConfig::default(),
     );
-    let protected_mcp = Router::new().nest_service("/mcp", mcp).layer(
-        middleware::from_fn_with_state(state.clone(), auth_middleware),
-    );
+    let protected = Router::new()
+        .nest_service("/mcp", mcp)
+        .route("/v1/memories", get(list_memories).post(write_memory))
+        .route(
+            "/v1/memories/{id}",
+            get(get_memory).patch(patch_memory).delete(delete_memory),
+        )
+        .route("/v1/scopes", get(scopes))
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            auth_middleware,
+        ));
     Router::new()
         .route("/health", get(health))
         .route("/v1/pack", get(pack))
-        .merge(protected_mcp)
+        .merge(protected)
         .with_state(state)
 }
 
@@ -59,6 +69,107 @@ async fn auth_middleware(
     }
 }
 
+fn map_err(e: MemoryError) -> StatusCode {
+    match e {
+        MemoryError::NotFound => StatusCode::NOT_FOUND,
+        _ => StatusCode::BAD_REQUEST,
+    }
+}
+
+#[derive(Deserialize)]
+struct MemoriesQuery {
+    #[serde(default)]
+    layer: Option<String>,
+    #[serde(default)]
+    channel: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
+    #[serde(default)]
+    peer: Option<String>,
+    #[serde(default)]
+    person: Option<String>,
+    #[serde(default)]
+    q: Option<String>,
+    #[serde(default)]
+    limit: Option<u32>,
+    #[serde(default)]
+    before_ts: Option<i64>,
+}
+
+async fn list_memories(
+    State(state): State<AppState>,
+    Query(q): Query<MemoriesQuery>,
+) -> Result<Json<Vec<Memory>>, StatusCode> {
+    let layer = match q.layer.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(raw) => Some(Layer::parse(raw).ok_or(StatusCode::BAD_REQUEST)?),
+        None => None,
+    };
+    let conversation = match (q.kind.as_deref().and_then(ConversationKind::parse), q.peer) {
+        (Some(kind), Some(peer)) if !peer.is_empty() => Some(Conversation { kind, peer }),
+        _ => None,
+    };
+    state
+        .service
+        .list(ListParams {
+            layer,
+            channel: q.channel.filter(|s| !s.is_empty()),
+            conversation,
+            person: q.person.filter(|s| !s.is_empty()),
+            query: q.q,
+            limit: q.limit.unwrap_or(50),
+            before_ts: q.before_ts,
+        })
+        .map(Json)
+        .map_err(map_err)
+}
+
+async fn write_memory(
+    State(state): State<AppState>,
+    Json(body): Json<WriteParams>,
+) -> Result<Json<Memory>, StatusCode> {
+    state.service.write(body).map(Json).map_err(map_err)
+}
+
+async fn get_memory(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Memory>, StatusCode> {
+    state
+        .service
+        .get(crate::service::GetParams { id })
+        .map(Json)
+        .map_err(map_err)
+}
+
+async fn patch_memory(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(body): Json<PatchParams>,
+) -> Result<Json<Memory>, StatusCode> {
+    state
+        .service
+        .update_text(&id, body)
+        .map(Json)
+        .map_err(map_err)
+}
+
+async fn delete_memory(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, StatusCode> {
+    state
+        .service
+        .forget(crate::service::ForgetParams { id })
+        .map(|_| Json(serde_json::json!({"ok": true})))
+        .map_err(map_err)
+}
+
+async fn scopes(
+    State(state): State<AppState>,
+) -> Result<Json<crate::types::Scopes>, StatusCode> {
+    state.service.scopes().map(Json).map_err(map_err)
+
+}
 #[derive(Deserialize)]
 struct PackQuery {
     #[serde(default)]
