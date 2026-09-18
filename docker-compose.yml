@@ -7,8 +7,9 @@ services:
     env_file:
       - ./workspace/.env
     volumes:
-      - ./workspace/home:/workspace
-      - ./workspace/.pi:/root/.pi
+      - ./workspace/workspace:/workspace
+      - ./workspace/home:/root
+      - ./workspace/data:/workspace/data
       - ./docker/daemon.toml:/etc/gladys/daemon.toml:ro
       - ${GLADYS_DAEMON_BIN:-./target/release/gladys-daemon}:/usr/local/bin/gladys-daemon:ro
     working_dir: /workspace

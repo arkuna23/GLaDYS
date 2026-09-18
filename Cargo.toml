@@ -5,6 +5,7 @@ members = [
     "crates/gladys-memory",
     "crates/gladys-gateway",
     "crates/gladys-daemon",
+    "crates/gladys-web",
 ]
 
 [workspace.package]

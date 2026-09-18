@@ -37,7 +37,7 @@ if [[ "$docker" -eq 1 ]]; then
   exec docker exec -it -w /workspace gladys-agent bash
 fi
 
-export HOME="$ROOT/workspace"
-mkdir -p workspace/home
-cd workspace/home
+export HOME="$ROOT/workspace/home"
+mkdir -p workspace/workspace
+cd workspace/workspace
 exec "${SHELL:-bash}"

@@ -4,7 +4,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 CC=musl-gcc cargo build --release --target x86_64-unknown-linux-musl \
-  -p gladys-channel -p gladys-memory -p gladys-gateway -p gladys-daemon
+  -p gladys-channel -p gladys-memory -p gladys-gateway -p gladys-daemon -p gladys-web
 
 rm -rf dist/gladys
 mkdir -p dist/gladys/bin dist/gladys/scripts dist/gladys/docker
@@ -12,7 +12,8 @@ mkdir -p dist/gladys/bin dist/gladys/scripts dist/gladys/docker
 cp target/x86_64-unknown-linux-musl/release/gladys-channel \
   target/x86_64-unknown-linux-musl/release/gladys-memory \
   target/x86_64-unknown-linux-musl/release/gladys-gateway \
-  target/x86_64-unknown-linux-musl/release/gladys-daemon dist/gladys/bin/
+  target/x86_64-unknown-linux-musl/release/gladys-daemon \
+  target/x86_64-unknown-linux-musl/release/gladys-web dist/gladys/bin/
 chmod +x dist/gladys/bin/*
 
 cp scripts/init.sh scripts/start.sh scripts/stop.sh scripts/stop-host.sh \
@@ -21,7 +22,7 @@ chmod +x dist/gladys/scripts/*
 
 cp Dockerfile docker-compose.yml justfile dist/gladys/
 cp docker/entrypoint.sh docker/daemon.toml dist/gladys/docker/
-cp channel.toml.example memory.toml.example gateway.toml.example daemon.toml.example dist/gladys/
+cp channel.toml.example memory.toml.example gateway.toml.example daemon.toml.example web.toml.example dist/gladys/
 cp -r examples dist/gladys/
 cp -r skills dist/gladys/
 

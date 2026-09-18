@@ -15,7 +15,7 @@ package:
 shell *args:
     ./scripts/shell.sh {{args}}
 
-# Host Channel/Memory/Gateway. Use `just start -- --docker` for containers.
+# Host Channel/Memory/Gateway/Web. Use `just start -- --docker` for containers.
 start *args:
     ./scripts/start.sh {{args}}
 

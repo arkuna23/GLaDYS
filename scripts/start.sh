@@ -24,7 +24,7 @@ if [[ -x "$ROOT/bin/gladys-channel" ]]; then
   BIN="$ROOT/bin"
 elif [[ -f "$ROOT/Cargo.toml" ]]; then
   CC=musl-gcc cargo build --release --target x86_64-unknown-linux-musl \
-    -p gladys-channel -p gladys-memory -p gladys-gateway -p gladys-daemon
+    -p gladys-channel -p gladys-memory -p gladys-gateway -p gladys-daemon -p gladys-web
   BIN="$ROOT/target/x86_64-unknown-linux-musl/release"
 else
   echo "missing binaries (bin/) and no Cargo.toml to build" >&2
@@ -62,7 +62,7 @@ else
     echo "pi-acp not on PATH; install it or use --docker" >&2
     exit 1
   fi
-  export GLADYS_ACP_CWD="$ROOT/workspace/home"
+  export GLADYS_ACP_CWD="$ROOT/workspace/workspace"
 fi
 trap './scripts/stop-host.sh' EXIT INT TERM
 
@@ -72,12 +72,14 @@ wait_port 3920 workspace/run/channel.pid
 wait_port 3921 workspace/run/memory.pid
 "$BIN/gladys-gateway" --config workspace/gateway.toml & echo $! > workspace/run/gateway.pid
 wait_port 3922 workspace/run/gateway.pid
+"$BIN/gladys-web" --config workspace/web.toml & echo $! > workspace/run/web.pid
+wait_port 3924 workspace/run/web.pid
 
 if [[ "$docker" -eq 0 ]]; then
   "$BIN/gladys-daemon" --config workspace/daemon.toml & echo $! > workspace/run/daemon.pid
   wait_port 3923 workspace/run/daemon.pid
-  echo "channel/memory/gateway/daemon up. Ctrl+C stops host."
+  echo "channel/memory/gateway/web/daemon up. Ctrl+C stops host."
 else
-  echo "channel/memory/gateway up. agent+daemon in docker. Ctrl+C stops host (docker stays)."
+  echo "channel/memory/gateway/web up. agent+daemon in docker. Ctrl+C stops host (docker stays)."
 fi
 wait

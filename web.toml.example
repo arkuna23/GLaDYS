@@ -1,0 +1,5 @@
+bind = "0.0.0.0:3924"
+data_dir = "./data/web"
+token_env = "GLADYS_WEB_TOKEN"
+memory_url = "http://127.0.0.1:3921"
+memory_token_env = "GLADYS_MEMORY_TOKEN"

@@ -625,6 +625,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "gladys-web"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "axum",
+ "http-body-util",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "toml",
+ "tower",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "hashbrown"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
